@@ -46,7 +46,7 @@ static int32_t case_add_idempotent(void) {
     if (p2 < 0) return fail_nei("add 2");
     if (p1 != p2) return fail_nei("peer_id changed on idempotent add");
 
-    if (pm_metal_neighbors_at((uint32_t)p1, &out) != 0) return fail_nei("at");
+    if (pm_metal_neighbors_at((uint32_t)pm_metal_neighbors_find("zid-bbb"), &out) != 0) return fail_nei("at");
     if (strcmp(out.host, "192.168.1.2") != 0) return fail_nei("host not updated");
     if (out.caps != PM_METAL_NEIGHBOR_CAP_HAS_BUILD) return fail_nei("caps not updated");
 
@@ -107,13 +107,12 @@ static int32_t case_reap(void) {
     (void)pm_metal_neighbors_add("zid-fff", "10.0.0.6", 0);
     (void)pm_metal_neighbors_add("zid-ggg", "10.0.0.7", 0);
 
-    /* Drop "zid-ggg" (sets alive=0) */
-    (void)pm_metal_neighbors_drop("zid-ggg");
-
+    /* A zero timeout leaves a live neighbor alone. */
+    (void)pm_metal_neighbors_seen("zid-ggg");
     reaped = pm_metal_neighbors_reap(0);
     n_after = pm_metal_neighbors_count();
-    if (reaped != 1) return fail_nei("reaped count");
-    if (n_after != n_before + 1) return fail_nei("count after reap");
+    if (reaped != 0) return fail_nei("reaped count");
+    if (n_after != n_before + 2) return fail_nei("count after reap");
 
     /* Verify "zid-fff" still exists */
     if (pm_metal_neighbors_find("zid-fff") < 0) return fail_nei("zid-fff gone after reap");

@@ -309,10 +309,14 @@ static void zenoh_local_zid(uint8_t out[PM_METAL_NET_ZENOH_ZID_LEN]) {
     for (i = 0; i < 8; i++) {
         s_local_zid[4 + i] = (uint8_t)(t >> (8u * i));
     }
-    s_local_zid[12] = 0x7f;
-    s_local_zid[13] = 0x00;
-    s_local_zid[14] = 0x00;
-    s_local_zid[15] = 0x01;
+    {
+        uint32_t ip = pm_metal_net_ip_if_addr(1);
+        if (ip == 0u) ip = pm_metal_net_ip_if_addr(0);
+        s_local_zid[12] = (uint8_t)(ip >> 24);
+        s_local_zid[13] = (uint8_t)(ip >> 16);
+        s_local_zid[14] = (uint8_t)(ip >> 8);
+        s_local_zid[15] = (uint8_t)ip;
+    }
     s_local_zid_init = 1;
     memcpy(out, s_local_zid, PM_METAL_NET_ZENOH_ZID_LEN);
 }
@@ -527,7 +531,8 @@ static int32_t accept_pump(uint8_t slot) {
                 }
                 _z_t_msg_clear(&iam);
                 if (ret != _Z_RES_OK) {
-                    ret = _Z_RES_OK; /* message send churn tolerated; keep stepping */
+                    st = -1;
+                    break;
                 }
                 ac->phase = 2;
             }
@@ -549,8 +554,7 @@ static int32_t accept_pump(uint8_t slot) {
             {
                 _z_transport_message_t oam;
                 z_random_fill(&ac->param._initial_sn_tx, sizeof(ac->param._initial_sn_tx));
-                ac->param._initial_sn_tx =
-                    ac->param._initial_sn_tx & (_z_zint_t)~_z_sn_modulo_mask(ac->param._seq_num_res);
+                ac->param._initial_sn_tx &= _z_sn_modulo_mask(ac->param._seq_num_res);
                 oam = _z_t_msg_make_open_ack(Z_TRANSPORT_LEASE, ac->param._initial_sn_tx);
                 {
                     _z_session_t *sess_raw = meter_session_raw(sl);
@@ -558,7 +562,10 @@ static int32_t accept_pump(uint8_t slot) {
                                              &(_z_sys_net_socket_t){._fd = ac->fd});
                 }
                 _z_t_msg_clear(&oam);
-                (void)ret; /* tolerated; the connector drives completion */
+                if (ret != _Z_RES_OK) {
+                    st = -1;
+                    break;
+                }
                 ac->param_ready = 1;
                 ac->phase = 3;
             }
@@ -624,6 +631,19 @@ static int32_t try_open(pm_metal_net_zenoh_ctx_t *sl) {
     }
 
     z_config_default(&sl->config);
+    {
+        uint8_t zid[PM_METAL_NET_ZENOH_ZID_LEN];
+        char zid_text[33];
+        static const char hex[] = "0123456789abcdef";
+        uint32_t i;
+        zenoh_local_zid(zid);
+        for (i = 0; i < PM_METAL_NET_ZENOH_ZID_LEN; i++) {
+            zid_text[i * 2u] = hex[zid[i] >> 4];
+            zid_text[i * 2u + 1u] = hex[zid[i] & 15u];
+        }
+        zid_text[32] = '\0';
+        zp_config_insert(z_loan_mut(sl->config), Z_CONFIG_SESSION_ZID_KEY, zid_text);
+    }
     fill_locator(sl, locator, sizeof(locator));
     if (sl->mode == 0u) {
         zp_config_insert(z_loan_mut(sl->config), Z_CONFIG_MODE_KEY, Z_CONFIG_MODE_CLIENT);
@@ -784,9 +804,13 @@ int32_t pm_metal_net_zenoh_put(const char *key, const uint8_t *payload, uint32_t
         return -1;
     }
     z_view_keyexpr_from_str_unchecked(&ke, key);
-    z_bytes_copy_from_buf(&data, payload, plen);
+    if (z_bytes_copy_from_buf(&data, payload, plen) != Z_OK) {
+        return -1;
+    }
+    /* z_put consumes the moved payload on every return path. Dropping data a
+     * second time corrupted Zenoh's allocator during the firmware roster burst
+     * and eventually dispatched a subscriber callback through freed memory. */
     ret = z_put(z_loan(sl->session), z_loan(ke), z_move(data), NULL);
-    z_drop(z_move(data));
     return ret == Z_OK ? 1 : -1;
 }
 
@@ -1153,16 +1177,15 @@ int32_t pm_metal_net_zenoh_scout(uint8_t what, uint8_t out_zid[PM_METAL_NET_ZENO
     if (fd < 0) {
         return -1;
     }
-    /* Pin the probe socket to the loopback address, not 0.0.0.0/any. The
-     * discovery SWARM group is scouted over lo on every seat, and pm_ip_src_for
-     * uses a bound local address as the datagram source; binding *any* lets
-     * ip_src_route borrow whichever NIC happens to be up first in the boot
-     * (e.g. sim's 10.0.0.1) once sim is live, so the answerer's unicast HELLO
-     * returns to 10.0.0.2:0 instead of our lo socket and the round-trip never
-     * lands. Pinning to 127.0.0.1 makes the source lo in every boot state. */
-    if (pm_metal_net_ip_bind(fd, 0x7f000001u, 0u) != 0) {
-        (void)pm_metal_net_ip_close(fd);
-        return -1;
+    /* Prefer a physical/shared interface for real discovery, retaining
+     * loopback as the honest fallback on seats whose only interface is lo. */
+    {
+        uint32_t source = pm_metal_net_ip_if_addr(1);
+        if (source == 0u) source = 0x7f000001u;
+        if (pm_metal_net_ip_bind(fd, source, 0u) != 0) {
+            (void)pm_metal_net_ip_close(fd);
+            return -1;
+        }
     }
     slen = scout_encode(0, what, 0u, NULL, scout); /* SCOUT for `what` with the local ZID */
     if (slen == 0u || pm_metal_net_ip_sendto(fd, scout, slen, PM_METAL_NET_ZENOH_SCOUT_GROUP,

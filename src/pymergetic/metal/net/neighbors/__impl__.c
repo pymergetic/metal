@@ -9,6 +9,8 @@
 #include "pymergetic/metal/net/neighbors/__exports__.h"
 
 #include "pymergetic/util/limits.h"
+#include "pymergetic/metal/coop/__exports__.h"
+#include "pymergetic/metal/services/__exports__.h"
 
 #include <string.h>
 #include <stdint.h>
@@ -55,6 +57,7 @@ int32_t pm_metal_neighbors_add(const char *zenoh_id, const char *host, uint32_t 
                 sizeof(s_neighbors[idx].host) - 1);
             s_neighbors[idx].host[sizeof(s_neighbors[idx].host) - 1] = '\0';
             s_neighbors[idx].caps = caps;
+            s_neighbors[idx].last_seen_us = (int64_t)pm_metal_coop_mono_us();
             s_neighbors[idx].alive = 1;
             return (int32_t)s_neighbors[idx].peer_id;
         }
@@ -72,6 +75,7 @@ int32_t pm_metal_neighbors_add(const char *zenoh_id, const char *host, uint32_t 
         sizeof(s_neighbors[s_nn].host) - 1);
     s_neighbors[s_nn].host[sizeof(s_neighbors[s_nn].host) - 1] = '\0';
     s_neighbors[s_nn].caps = caps;
+    s_neighbors[s_nn].last_seen_us = (int64_t)pm_metal_coop_mono_us();
     s_neighbors[s_nn].alive = 1;
     s_nn++;
     return (int32_t)s_neighbors[s_nn - 1].peer_id;
@@ -85,6 +89,7 @@ int32_t pm_metal_neighbors_seen(const char *zenoh_id) {
     for (i = 0; i < s_nn; i++) {
         if (s_neighbors[i].alive &&
             strcmp(s_neighbors[i].zenoh_id, zenoh_id) == 0) {
+            s_neighbors[i].last_seen_us = (int64_t)pm_metal_coop_mono_us();
             s_neighbors[i].alive = 1;
             return (int32_t)s_neighbors[i].peer_id;
         }
@@ -140,23 +145,20 @@ int32_t pm_metal_neighbors_find(const char *zenoh_id) {
 /* Reap neighbors no longer alive (alive=0 from drop or marked stale).
  * Compacts the array and returns number of entries removed. */
 uint32_t pm_metal_neighbors_reap(int64_t timeout_us) {
-    uint32_t i;
-    uint32_t n;
+    uint32_t i = 0;
     uint32_t reaped = 0;
-    (void)timeout_us;
-    n = s_nn;
-    for (i = 0; i < n; i++) {
-        if (!s_neighbors[i].alive) {
-            n--;
-            if (i < n) {
-                s_neighbors[i] = s_neighbors[n];
-            }
-            memset(&s_neighbors[n], 0, sizeof(pm_metal_neighbor_t));
-            reaped++;
-            i--;
-        }
+    int64_t now = (int64_t)pm_metal_coop_mono_us();
+    while (i < s_nn) {
+        int stale = !s_neighbors[i].alive;
+        if (!stale && timeout_us > 0 && now >= s_neighbors[i].last_seen_us
+                && now - s_neighbors[i].last_seen_us >= timeout_us) stale = 1;
+        if (!stale) { i++; continue; }
+        (void)pm_metal_services_drop_peer(s_neighbors[i].peer_id);
+        s_nn--;
+        if (i < s_nn) s_neighbors[i] = s_neighbors[s_nn];
+        memset(&s_neighbors[s_nn], 0, sizeof(pm_metal_neighbor_t));
+        reaped++;
     }
-    s_nn = n;
     return reaped;
 }
 

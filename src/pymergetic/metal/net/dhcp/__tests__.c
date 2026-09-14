@@ -180,6 +180,11 @@ static void srv_reply(const uint8_t *req, uint32_t reqlen, uint8_t type) {
     srv.qlen = (uint16_t)(14u + total);
 }
 
+static uint32_t srv_frame_max(void *ctx) {
+    (void)ctx;
+    return SRV_FRAME;
+}
+
 static int32_t srv_tx(void *ctx, const uint8_t *frame, uint16_t len) {
     const uint8_t *pkt;
     const uint8_t *boot;
@@ -254,6 +259,7 @@ static int32_t case_dora(void) {
     srv.ops.open = srv_open;
     srv.ops.close = srv_close;
     srv.ops.mac = srv_mac_of;
+    srv.ops.frame_max = srv_frame_max;
     srv.ops.tx = srv_tx;
     srv.ops.poll = srv_poll;
     if (pm_metal_net_l2_attach("dhcptest", &srv.ops) != 0) {

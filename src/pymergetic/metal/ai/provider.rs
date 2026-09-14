@@ -1,0 +1,1 @@
+//! pymergetic.metal.ai.provider -- namespace barrel.

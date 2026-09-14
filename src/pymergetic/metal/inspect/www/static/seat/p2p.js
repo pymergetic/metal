@@ -11,7 +11,9 @@
       catch (e) { cb(null, e); }
     };
     x.onerror = function () { cb(null, "fetch failed"); };
+    x.ontimeout = function () { cb(null, "fetch timeout"); };
     x.open(method, url);
+    x.timeout = 10000;
     x.send();
   }
 
@@ -144,14 +146,35 @@
     }
   }
 
+  var pollInFlight = false;
+  var pollGeneration = 0;
+
   function poll() {
-    json_get("/p2p/self", fill_self);
-    json_get("/p2p/neighbors", fill_neighbors);
-    json_get("/p2p/rpc/handlers", fill_rpc_handlers);
-    json_get("/p2p/rpc/calls", fill_rpc_calls);
-    json_get("/p2p/dstate", fill_dstate);
-    json_get("/p2p/cloud", fill_cloud);
-    json_get("/p2p/workspace", fill_workspace);
+    if (pollInFlight) return;
+    pollInFlight = true;
+    var generation = ++pollGeneration;
+    var requests = [
+      ["/p2p/self", fill_self],
+      ["/p2p/neighbors", fill_neighbors],
+      ["/p2p/rpc/handlers", fill_rpc_handlers],
+      ["/p2p/rpc/calls", fill_rpc_calls],
+      ["/p2p/dstate", fill_dstate],
+      ["/p2p/cloud", fill_cloud],
+      ["/p2p/workspace", fill_workspace]
+    ];
+    var next = 0;
+    function step() {
+      if (generation !== pollGeneration || next === requests.length) {
+        if (generation === pollGeneration) pollInFlight = false;
+        return;
+      }
+      var request = requests[next++];
+      json_get(request[0], function (data, err) {
+        if (generation === pollGeneration) request[1](data, err);
+        step();
+      });
+    }
+    step();
   }
 
   /* ---- Self Identity (from /capabilities + /inspect/self) ---- */
@@ -187,7 +210,6 @@
 
   var cloudButton = el("p2p-cloud-test");
   if (cloudButton) cloudButton.addEventListener("click", cloud_test);
-  json_get("/p2p/self", fill_self);
   poll();
   setInterval(poll, POLL_MS);
 })();

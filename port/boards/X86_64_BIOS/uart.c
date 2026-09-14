@@ -1,5 +1,7 @@
 /* Freestanding COM1 UART (115200 8N1) — TX + blocking RX. */
 #include <stddef.h>
+
+void pm_metal_firmware_idle_poll(void);
 #include <stdint.h>
 
 #include "io.h"
@@ -74,6 +76,7 @@ int uart_rx_chr(void)
         if ((inb(COM1_BASE + 5u) & 0x01u) != 0u) {
             return (int)inb(COM1_BASE);
         }
+        pm_metal_firmware_idle_poll();
         __asm__ volatile("pause");
     }
 }

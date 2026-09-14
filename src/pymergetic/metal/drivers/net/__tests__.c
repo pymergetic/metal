@@ -25,6 +25,11 @@ static void mac_b(void *ctx, uint8_t out[6]) {
     memcpy(out, s_mac_b, 6);
 }
 
+static uint32_t frame_max(void *ctx) {
+    (void)ctx;
+    return PM_METAL_NET_ETH_FRAME_MAX;
+}
+
 static int32_t nop_tx(void *ctx, const uint8_t *frame, uint16_t len) {
     (void)ctx;
     (void)frame;
@@ -55,10 +60,12 @@ int32_t pm_metal_drivers_net_tests(void) {
     memset(&ob, 0, sizeof(ob));
     oa.open = nop_open;
     oa.mac = mac_a;
+    oa.frame_max = frame_max;
     oa.tx = nop_tx;
     oa.poll = nop_poll;
     ob.open = nop_open;
     ob.mac = mac_b;
+    ob.frame_max = frame_max;
     ob.tx = nop_tx;
     ob.poll = nop_poll;
     if (pm_metal_drivers_net_init(NULL) != -1) {

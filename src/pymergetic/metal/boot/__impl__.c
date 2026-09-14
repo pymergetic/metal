@@ -8,11 +8,13 @@
 #include "pymergetic/metal/drivers/net.h"
 #include "pymergetic/metal/fw/memmap.h"
 #include "pymergetic/metal/net/dhcp.h"
+#include "pymergetic/metal/net/dns.h"
 #include "pymergetic/metal/net/ip.h"
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/__version__.h"
 #include "pymergetic/wasmmod/boot.h"
 #include "third_party/wamr/core/version.h"
+#include "mbedtls/build_info.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -207,18 +209,39 @@ static int32_t nics_up(void) {
         (void)pm_metal_net_dhcp_set_wait_us(PM_METAL_BOOT_DHCP_WAIT_US);
     }
     for (i = 0; i < PM_METAL_DT_WALK; i++) {
-        if (pm_metal_drivers_net_dt_id(i) < 0) {
+        int32_t dt = pm_metal_drivers_net_dt_id(i);
+        int32_t h;
+        if (dt < 0) {
             continue;
         }
-        /* A leased address is the real one; the made-up 10.0.0.x only holds the
-         * interface open on a seat with no server. */
-        if (ask && pm_metal_net_dhcp_up(i, NULL) == 0) {
-            up++;
-            continue;
-        }
-        if (pm_metal_net_ip_if_up_h(i, addr) == 0) {
-            up++;
-            addr++;
+        h = pm_metal_drivers_net_by_dt(dt);
+        if (h < 0) continue;
+        {
+            uint8_t mac[6];
+            uint32_t fallback = addr;
+            memset(mac, 0, sizeof(mac));
+            pm_metal_drivers_net_mac(h, mac);
+            /* The dedicated multi-seat LAN uses an explicit 52:54:00:70 MAC
+             * prefix. It intentionally skips DHCP so the same immutable image
+             * derives stable 10.0.0.<tail> addresses in every VM. */
+            if (!(mac[0] == 0x52u && mac[1] == 0x54u && mac[3] == 0x70u)
+                    && ask && pm_metal_net_dhcp_up(h, NULL) == 0) {
+                up++;
+                continue;
+            }
+            /* Independent seats begin their fallback LAN identity from the
+             * NIC identity rather than every boot claiming 10.0.0.1. QEMU's
+             * multi-seat harness pins distinct MAC tails, giving 10.0.0.11/12;
+             * hosted sim remains 10.0.0.1. */
+            if (mac[5] != 0u) fallback = 0x0a000000u | (uint32_t)mac[5];
+            if (pm_metal_net_ip_if_up_h(h, fallback) == 0) {
+                if (mac[0] == 0x52u && mac[1] == 0x54u && mac[3] == 0x70u) {
+                    (void)pm_metal_net_ip_gw_set(0x0a000002u);
+                    (void)pm_metal_net_dns_server_set(0x0a000003u);
+                }
+                up++;
+                addr++;
+            }
         }
     }
     return up > 0 ? 0 : -1;
@@ -288,6 +311,10 @@ PM_MOD_EXPORT_C(pymergetic.metal.boot, pm_metal_boot_seat, pm_metal_boot_seat, c
 PM_MOD_EXPORT_C(pymergetic.metal.boot, pm_metal_boot_arena, pm_metal_boot_arena, pm_util_mem_arena_t *(void));
 PM_MOD_EXPORT_C(pymergetic.metal.boot, pm_metal_boot_span_take, pm_metal_boot_span_take, void *(size_t));
 PM_MOD_EXPORT_C(pymergetic.metal.boot, pm_metal_boot_span_give, pm_metal_boot_span_give, void(void *, size_t));
+
+/* mbedTLS is compiled directly into every Metal seat; report the version from
+ * the same upstream header that controls those translation units. */
+PM_METAL_EXTERNAL_C(mbedtls, MBEDTLS_VERSION_STRING);
 
 /* tlsf.h: "Two Level Segregated Fit memory allocator, version 3.1." */
 PM_METAL_EXTERNAL_C(tlsf, "3.1");

@@ -126,6 +126,11 @@ static void tap_mac(void *ctx, uint8_t out[6]) {
     memcpy(out, d->mac, 6);
 }
 
+static uint32_t tap_frame_max(void *ctx) {
+    struct tap_nic *d = ctx;
+    return d != NULL && d->qframe < PM_METAL_NET_ETH_FRAME_MAX ? d->qframe : PM_METAL_NET_ETH_FRAME_MAX;
+}
+
 static int32_t tap_tx(void *ctx, const uint8_t *frame, uint16_t len) {
     struct tap_nic *d = ctx;
 #if defined(__linux__) && !defined(PM_METAL_FIRMWARE)
@@ -221,6 +226,7 @@ static int32_t tap_attach(uint32_t unit) {
     d->ops.open = tap_open;
     d->ops.close = tap_close;
     d->ops.mac = tap_mac;
+    d->ops.frame_max = tap_frame_max;
     d->ops.tx = tap_tx;
     d->ops.poll = tap_poll;
     d->ops.ctx = d;

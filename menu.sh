@@ -64,15 +64,8 @@ need_tree() {
 }
 
 need_emcc() {
-    if command -v emcc >/dev/null 2>&1; then
-        return 0
-    fi
-    if [[ -n "${EMSDK-}" && -x "${EMSDK}/upstream/emscripten/emcc" ]]; then
-        PATH="${EMSDK}/upstream/emscripten:${PATH}"
-        export PATH
-        return 0
-    fi
-    die "emcc not on PATH. Set EMSDK to an emsdk checkout (or install emscripten)."
+    PATH="$($METAL/tools/emscripten.py path)"
+    export PATH
 }
 
 unix_flags() {
@@ -176,11 +169,17 @@ run_unix() {
 }
 
 build_emcc() {
-    local tree="$1" root flags
+    local tree="$1" root flags build
     need_emcc
     root="$(unix_root "$tree")"
     need_tree "$root" "$tree"
     flags="$(emcc_flags "$tree")"
+    case "$tree" in
+    upy) build=build-standard ;;
+    upywm) build=build-wasmmod ;;
+    mp) build=build-metal ;;
+    esac
+    "$METAL/tools/emscripten.py" prepare "$root/ports/webassembly/$build"
     say "make -C $tree/ports/webassembly $flags"
     # shellcheck disable=SC2086
     make -C "$root/ports/webassembly" $flags

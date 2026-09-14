@@ -124,6 +124,11 @@ static void bge_mac(void *ctx, uint8_t out[6]) {
     memcpy(out, d->mac, 6);
 }
 
+static uint32_t bge_frame_max(void *ctx) {
+    struct bge_nic *d = ctx;
+    return d != NULL && d->qframe < PM_METAL_NET_ETH_FRAME_MAX ? d->qframe : PM_METAL_NET_ETH_FRAME_MAX;
+}
+
 static int32_t bge_tx(void *ctx, const uint8_t *frame, uint16_t len) {
     struct bge_nic *d = ctx;
     uint32_t i;
@@ -131,7 +136,7 @@ static int32_t bge_tx(void *ctx, const uint8_t *frame, uint16_t len) {
         return -1;
     }
     if (d->n >= d->qn) {
-        return -1;
+        return PM_METAL_NET_TX_WAIT;
     }
     i = (d->head + d->n) % d->qn;
     memcpy(bge_slot(d, i), frame, len);
@@ -219,6 +224,7 @@ static int32_t bge_attach(int32_t bus, uint32_t loc0, uint32_t loc1, uint32_t lo
     d->ops.open = bge_open;
     d->ops.close = bge_close;
     d->ops.mac = bge_mac;
+    d->ops.frame_max = bge_frame_max;
     d->ops.tx = bge_tx;
     d->ops.poll = bge_poll;
     d->ops.ctx = d;

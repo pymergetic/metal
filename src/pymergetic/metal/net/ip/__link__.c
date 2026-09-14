@@ -283,13 +283,13 @@ int32_t pm_ip_l2_addr_ours(uint32_t dst_be) {
 }
 
 
-void pm_ip_eth_tx(int32_t h, const uint8_t dmac[6], uint16_t ethertype, const uint8_t *body,
+int32_t pm_ip_eth_tx(int32_t h, const uint8_t dmac[6], uint16_t ethertype, const uint8_t *body,
     uint32_t len) {
     uint8_t frame[PM_METAL_IP_PKT_MAX + 14u];
     uint8_t smac[6];
     uint32_t flen;
     if (h < 0 || dmac == NULL || body == NULL || len == 0 || len > PM_METAL_IP_PKT_MAX) {
-        return;
+        return -1;
     }
     memcpy(frame, dmac, 6);
     memset(smac, 0, sizeof(smac));
@@ -302,7 +302,7 @@ void pm_ip_eth_tx(int32_t h, const uint8_t dmac[6], uint16_t ethertype, const ui
         memset(frame + flen, 0, 60u - flen);
         flen = 60u;
     }
-    (void)pm_metal_drivers_net_tx(h, frame, (uint16_t)flen);
+    return pm_metal_drivers_net_tx(h, frame, (uint16_t)flen);
 }
 
 static const uint8_t arp_bcast[6] = { 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu };

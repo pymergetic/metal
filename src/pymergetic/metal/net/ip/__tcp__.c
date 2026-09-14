@@ -4,13 +4,13 @@
 
 #include <string.h>
 
-static void tcp_emit(struct pm_metal_sock *s, uint8_t flags, const uint8_t *data, uint32_t dlen,
+static int32_t tcp_emit(struct pm_metal_sock *s, uint8_t flags, const uint8_t *data, uint32_t dlen,
     uint32_t seq) {
     uint32_t th = 20u;
     uint32_t total = 20u + th + dlen;
     uint8_t pkt[PM_METAL_IP_PKT_MAX];
     if (total > PM_METAL_IP_PKT_MAX) {
-        return;
+        return -1;
     }
     memset(pkt, 0, total);
     pkt[0] = 0x45;
@@ -27,29 +27,127 @@ static void tcp_emit(struct pm_metal_sock *s, uint8_t flags, const uint8_t *data
     pm_ip_write_be32(pkt + 28, s->rcv_nxt);
     pkt[32] = 0x50;
     pkt[33] = flags;
-    uint32_t wnd = s->rx_cap - s->rx_len; /* advertise real room */
+    uint32_t wnd = s->rx_cap - s->rx_len;
     pm_ip_write_be16(pkt + 34, wnd > 0xffffu ? 0xffffu : (uint16_t)wnd);
     if (dlen != 0 && data != NULL) {
         memcpy(pkt + 40, data, dlen);
     }
     pm_ip_l4_stamp(pkt, total);
-    pm_ip_output_via(s->l2_h, pkt, total);
+    return pm_ip_output_via(s->l2_h, pkt, total);
 }
 
-void pm_ip_tcp_xmit(struct pm_metal_sock *s, uint8_t flags, const uint8_t *data, uint32_t dlen) {
-    uint32_t seq = s->snd_nxt;
-    if ((flags & TCP_SYN) != 0 || (flags & TCP_FIN) != 0) {
-        s->snd_nxt += 1u;
+uint32_t pm_ip_tcp_payload_max(const struct pm_metal_sock *s) {
+    uint32_t frame_max;
+    uint32_t payload_max;
+    uint32_t src;
+    uint32_t dst;
+    uint32_t hop;
+    int32_t h;
+    if (s == NULL) {
+        return 0;
     }
-    s->snd_nxt += dlen;
-    tcp_emit(s, flags, data, dlen, seq);
-    if (dlen != 0 && dlen <= s->rexmit_cap && s->snd_una < s->snd_nxt) {
-        memcpy(s->rexmit, data, dlen);
-        s->rexmit_len = dlen;
-        s->rexmit_seq = seq;
-        s->rexmit_flags = flags;
-        s->rexmit_at = pm_metal_coop_mono_us() + PM_METAL_IP_RTO_US;
+    dst = s->raddr_be ? s->raddr_be : pm_ip_lo_addr_be;
+    if (pm_ip_lo_up && (dst == pm_ip_lo_addr_be || dst == PM_METAL_IP_LO_BE)) {
+        return PM_METAL_IP_TCP_MSS;
     }
+    src = pm_ip_src_for(s, dst);
+    h = pm_ip_route_out(s->l2_h, src, dst, &hop);
+    (void)hop;
+    if (h < 0) {
+        return 0;
+    }
+    frame_max = pm_metal_drivers_net_frame_max(h);
+    if (frame_max <= 14u + 20u + 20u) {
+        return 0;
+    }
+    payload_max = frame_max - 14u - 20u - 20u;
+    return payload_max < PM_METAL_IP_TCP_MSS ? payload_max : PM_METAL_IP_TCP_MSS;
+}
+
+int32_t pm_ip_tcp_xmit(struct pm_metal_sock *s, uint8_t flags, const uint8_t *data, uint32_t dlen) {
+    uint32_t seq;
+    uint32_t consumes;
+    uint32_t old_rexmit_len;
+    int32_t tx;
+    if (s == NULL) return PM_METAL_NET_TX_ERROR;
+    consumes = dlen + (((flags & (TCP_SYN | TCP_FIN)) != 0u) ? 1u : 0u);
+    if (consumes != 0u && s->rexmit_len + consumes > s->rexmit_cap) {
+        return PM_METAL_NET_TX_WAIT;
+    }
+    seq = s->snd_nxt;
+    old_rexmit_len = s->rexmit_len;
+    /* Reserve sequence space before emission. Loopback delivery is synchronous:
+     * the peer's ACK can recursively enter tcp_input before tcp_emit returns. */
+    if (consumes != 0u) {
+        if (old_rexmit_len == 0u) {
+            s->rexmit_seq = seq;
+            s->rexmit_flags = flags;
+            s->rexmit_at = pm_metal_coop_mono_us() + PM_METAL_IP_RTO_US;
+            s->rexmit_tries = 0u;
+        }
+        if (dlen != 0u && data != NULL) {
+            memcpy(s->rexmit + old_rexmit_len, data, dlen);
+        }
+        s->rexmit_len = old_rexmit_len + consumes;
+        s->rexmit_end = s->rexmit_seq + s->rexmit_len;
+        s->snd_nxt += consumes;
+    }
+    tx = tcp_emit(s, flags, data, dlen, seq);
+    if (tx != PM_METAL_NET_TX_OK) {
+        s->snd_nxt = seq;
+        s->rexmit_len = old_rexmit_len;
+        s->rexmit_end = old_rexmit_len != 0u ? s->rexmit_seq + old_rexmit_len : 0u;
+        return tx;
+    }
+    /* Do not touch s after successful emission: synchronous loopback ACK/FIN
+     * processing may have completed close and released the socket row. */
+    return PM_METAL_NET_TX_OK;
+}
+
+int32_t pm_ip_tcp_close(struct pm_metal_sock *s) {
+    int32_t tx;
+    if (s == NULL || s->kind != SK_TCP) {
+        return -1;
+    }
+    s->app_closed = 1u;
+    if (s->tcp_error) {
+        pm_ip_sock_drop(s->self_fd);
+        return 1;
+    }
+    if (s->tcp_st != TCP_ESTAB && s->tcp_st != TCP_CLOSE_WAIT
+        && s->tcp_st != TCP_FIN_WAIT
+        && s->tcp_st != TCP_LAST_ACK) {
+        pm_ip_sock_drop(s->self_fd);
+        return 1;
+    }
+    if (!s->fin_sent) {
+        int32_t fd = s->self_fd;
+        uint32_t loopback_passive = s->peer_fin && pm_ip_lo_up
+            && (s->raddr_be == pm_ip_lo_addr_be || s->raddr_be == PM_METAL_IP_LO_BE);
+        if (s->snd_una != s->snd_nxt || s->rexmit_len != 0u) {
+            return 0;
+        }
+        s->fin_sent = 1u;
+        s->tcp_st = s->peer_fin ? TCP_LAST_ACK : TCP_FIN_WAIT;
+        tx = pm_ip_tcp_xmit(s, (uint8_t)(TCP_FIN | TCP_ACK), NULL, 0);
+        if (tx == PM_METAL_NET_TX_WAIT) {
+            s->fin_sent = 0u;
+            return 0;
+        }
+        if (tx != PM_METAL_NET_TX_OK) {
+            pm_ip_sock_drop(s->self_fd);
+            return -1;
+        }
+        /* The active loopback closer was already ACKed and released before
+         * this passive close. Its FIN has no remaining row to ACK ours, but
+         * delivery is in-process and cannot be lost, so release LAST_ACK here. */
+        if (loopback_passive && pm_ip_sock_at(fd) == s) {
+            pm_ip_sock_drop(fd);
+        }
+        /* A synchronous loopback ACK may already have released s. */
+        return 0;
+    }
+    return 0;
 }
 
 void pm_ip_tcp_check_timeouts(void) {
@@ -57,13 +155,43 @@ void pm_ip_tcp_check_timeouts(void) {
     uint32_t i;
     for (i = 0; i < pm_ip_sk_cap; i++) {
         struct pm_metal_sock *s = pm_ip_sk[i];
-        if (s == NULL || s->kind != SK_TCP || s->rexmit_len == 0) {
+        int32_t tx;
+        if (s == NULL || s->kind != SK_TCP) {
             continue;
         }
-        if (now < s->rexmit_at) {
+        if (s->app_closed && !s->fin_sent && s->snd_una == s->snd_nxt && s->rexmit_len == 0u) {
+            (void)pm_ip_tcp_close(s);
             continue;
         }
-        tcp_emit(s, s->rexmit_flags, s->rexmit, s->rexmit_len, s->rexmit_seq);
+        if (s->rexmit_len == 0u || now < s->rexmit_at) {
+            continue;
+        }
+        {
+            uint32_t ctl = ((s->rexmit_flags & (TCP_SYN | TCP_FIN)) != 0u) ? 1u : 0u;
+            uint32_t dlen = s->rexmit_len - ctl;
+            uint32_t mss = pm_ip_tcp_payload_max(s);
+            if (dlen > mss) dlen = mss;
+            tx = tcp_emit(s, s->rexmit_flags, s->rexmit, dlen, s->rexmit_seq);
+        }
+        if (tx == PM_METAL_NET_TX_OK) {
+            s->rexmit_tries++;
+        }
+        if (s->rexmit_tries >= PM_METAL_IP_REXMIT_TRIES) {
+            /* close() transfers ownership back to TCP while its FIN is pending.
+             * No application can observe that fd again, so release it after the
+             * bounded retry budget. A live application fd must remain allocated:
+             * dropping that row here permits fd reuse before its coroutine wakes
+             * (fd ABA). */
+            if (s->app_closed) {
+                pm_ip_sock_drop(s->self_fd);
+                continue;
+            }
+            s->tcp_error = 1u;
+            s->rexmit_len = 0u;
+            s->rexmit_end = 0u;
+            pm_ip_sock_wake(s);
+            continue;
+        }
         s->rexmit_at = now + PM_METAL_IP_RTO_US;
     }
 }
@@ -138,16 +266,39 @@ void pm_ip_tcp_input(uint32_t src, uint32_t dst, const uint8_t *th, uint32_t thl
         s->peer_fin = 1;
         s->tcp_st = TCP_CLOSE_WAIT;
         pm_ip_sock_wake(s);
+        if (s->app_closed) {
+            pm_ip_sock_drop(s->self_fd);
+        }
         return;
     }
     if ((flags & TCP_ACK) != 0 && ack > s->snd_una && ack <= s->snd_nxt) {
         s->snd_una = ack;
-        if (s->rexmit_len != 0 && s->snd_una >= s->rexmit_seq + s->rexmit_len) {
-            s->rexmit_len = 0;
+        if (s->rexmit_len != 0 && s->snd_una > s->rexmit_seq) {
+            uint32_t acked = s->snd_una - s->rexmit_seq;
+            if (acked >= s->rexmit_len) {
+                s->rexmit_len = 0;
+                s->rexmit_end = 0;
+            } else {
+                memmove(s->rexmit, s->rexmit + acked, s->rexmit_len - acked);
+                s->rexmit_len -= acked;
+                s->rexmit_seq += acked;
+                s->rexmit_end = s->rexmit_seq + s->rexmit_len;
+            }
+            s->rexmit_tries = 0;
+            s->rexmit_at = pm_metal_coop_mono_us() + PM_METAL_IP_RTO_US;
         }
         /* An ACK freed send-window space; wake any coroutine parked on a full
          * window (streaming server responses) so it can push the next chunk. */
         pm_ip_sock_wake(s);
+        if (s->fin_sent && s->snd_una == s->snd_nxt
+            && (s->tcp_st == TCP_FIN_WAIT || s->tcp_st == TCP_LAST_ACK)
+            && (flags & TCP_FIN) == 0u) {
+            pm_ip_sock_drop(s->self_fd);
+            return;
+        } else if (s->app_closed && s->snd_una == s->snd_nxt) {
+            (void)pm_ip_tcp_close(s);
+            return;
+        }
     }
     /* Track the peer's advertised window so a streamed (large) response stops
      * sending when the peer's receive buffer is full instead of firing MSS
@@ -238,6 +389,13 @@ void pm_ip_tcp_input(uint32_t src, uint32_t dst, const uint8_t *th, uint32_t thl
             }
             pm_ip_tcp_xmit(s, TCP_ACK, NULL, 0);
             pm_ip_sock_wake(s);
+            if (s->app_closed && s->fin_sent && s->snd_una == s->snd_nxt) {
+                pm_ip_sock_drop(s->self_fd);
+                return;
+            }
+            if (s->app_closed && !s->fin_sent) {
+                (void)pm_ip_tcp_close(s);
+            }
         }
     }
 }

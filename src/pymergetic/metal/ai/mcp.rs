@@ -1,0 +1,1 @@
+//! pymergetic.metal.ai.mcp -- namespace barrel.

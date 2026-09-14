@@ -10,6 +10,7 @@
 #define PYMERGETIC_METAL_NET_IP_PRIV_H
 
 #include "pymergetic/metal/coop.h"
+#include "pymergetic/metal/drivers/net.h"
 #include "pymergetic/util/limits.h"
 #include "pymergetic/util/lock.h"
 #include "pymergetic/util/mem.h"
@@ -36,8 +37,9 @@
  * the console panel polling beside them. At four, the rest were dropped and the
  * page came up missing a stylesheet or a script. */
 #define PM_METAL_IP_ACCEPT_DEFAULT 16u
-#define PM_METAL_IP_REXMIT_DEFAULT 2048u
+#define PM_METAL_IP_REXMIT_DEFAULT 8192u
 #define PM_METAL_IP_RTO_US 50000ull
+#define PM_METAL_IP_REXMIT_TRIES 40u
 #define PM_METAL_IP_L2_DEFAULT 32u
 #define PM_METAL_IP_RT_DEFAULT 16u
 #define PM_METAL_IP_MASK24 0xffffff00u
@@ -67,6 +69,7 @@
 #define TCP_ESTAB 4u
 #define TCP_FIN_WAIT 5u
 #define TCP_CLOSE_WAIT 6u
+#define TCP_LAST_ACK 7u
 
 #define TCP_FIN 0x01u
 #define TCP_SYN 0x02u
@@ -105,7 +108,12 @@ struct pm_metal_sock {
     uint32_t rexmit_len;
     uint32_t rexmit_seq;
     uint8_t rexmit_flags;
+    uint8_t rexmit_tries;
+    uint32_t rexmit_end;
     uint64_t rexmit_at;
+    uint32_t app_closed;
+    uint32_t fin_sent;
+    uint32_t tcp_error;
     uint8_t *rx;
     uint32_t rx_cap;
     uint32_t rx_len;
@@ -227,7 +235,7 @@ uint32_t pm_ip_src_for(const struct pm_metal_sock *s, uint32_t dst);
  * h_hint is the socket's pinned interface, or -1 to route by address. */
 int32_t pm_ip_route_out(int32_t h_hint, uint32_t src_be, uint32_t dst_be, uint32_t *hop_be);
 int32_t pm_ip_l2_addr_ours(uint32_t dst_be);
-void pm_ip_eth_tx(int32_t h, const uint8_t dmac[6], uint16_t ethertype, const uint8_t *body,
+int32_t pm_ip_eth_tx(int32_t h, const uint8_t dmac[6], uint16_t ethertype, const uint8_t *body,
     uint32_t len);
 void pm_ip_arp_clear(void);
 int32_t pm_ip_arp_lookup(int32_t h, uint32_t addr_be, uint8_t mac[6]);
@@ -250,10 +258,12 @@ uint16_t pm_ip_read_be16(const uint8_t *p);
 void pm_ip_write_be16(uint8_t *p, uint16_t v);
 void pm_ip_output(const uint8_t *pkt, uint32_t len);
 /* Same, but leaving by the socket's pinned interface. */
-void pm_ip_output_via(int32_t h_hint, const uint8_t *pkt, uint32_t len);
+int32_t pm_ip_output_via(int32_t h_hint, const uint8_t *pkt, uint32_t len);
 
 /* __tcp__.c */
-void pm_ip_tcp_xmit(struct pm_metal_sock *s, uint8_t flags, const uint8_t *data, uint32_t dlen);
+int32_t pm_ip_tcp_xmit(struct pm_metal_sock *s, uint8_t flags, const uint8_t *data, uint32_t dlen);
+int32_t pm_ip_tcp_close(struct pm_metal_sock *s);
+uint32_t pm_ip_tcp_payload_max(const struct pm_metal_sock *s);
 void pm_ip_tcp_check_timeouts(void);
 void pm_ip_tcp_input(uint32_t src, uint32_t dst, const uint8_t *th, uint32_t thlen);
 

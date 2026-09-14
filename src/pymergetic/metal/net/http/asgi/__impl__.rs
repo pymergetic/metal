@@ -1673,7 +1673,9 @@ unsafe extern "C" fn step_listen(self_: *mut pm_metal_coop_coro_t) -> i32 {
             return ERROR;
         }
         if spawn_conn(a) != 0 {
-            return ERROR;
+            /* Refuse only this accepted connection. Transient pressure must
+             * never terminate the sole accept coroutine. */
+            return unsafe { pm_metal_coop_sleep_us(self_, 1000) };
         }
     }
 }

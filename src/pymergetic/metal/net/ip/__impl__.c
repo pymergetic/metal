@@ -646,9 +646,10 @@ int32_t pm_ip_close_locked(int32_t fd) {
             }
         }
     }
-    if (s->kind == SK_TCP && s->tcp_st == TCP_ESTAB) {
-        pm_ip_tcp_xmit(s, (uint8_t)(TCP_FIN | TCP_ACK), NULL, 0);
-        s->tcp_st = TCP_FIN_WAIT;
+    if (s->kind == SK_TCP && (s->tcp_st == TCP_ESTAB || s->tcp_st == TCP_FIN_WAIT
+            || s->tcp_st == TCP_CLOSE_WAIT || s->tcp_st == TCP_LAST_ACK)) {
+        int32_t rc = pm_ip_tcp_close(s);
+        return rc < 0 ? -1 : 0;
     }
     pm_ip_sock_drop(fd);
     return 0;
@@ -824,7 +825,7 @@ int32_t pm_metal_net_ip_established(int32_t fd) {
 
 int32_t pm_ip_send_locked(int32_t fd, const uint8_t *buf, uint32_t len) {
     struct pm_metal_sock *s = sock_get(fd, SK_TCP);
-    if (s == NULL || buf == NULL || s->tcp_st != TCP_ESTAB) {
+    if (s == NULL || buf == NULL || s->tcp_st != TCP_ESTAB || s->tcp_error) {
         return -1;
     }
     /* Send-window flow control: never exceed the bytes the peer can buffer.
@@ -845,13 +846,38 @@ int32_t pm_ip_send_locked(int32_t fd, const uint8_t *buf, uint32_t len) {
     if (len > room) {
         len = room;
     }
-    if (len > PM_METAL_IP_TCP_MSS) {
-        len = PM_METAL_IP_TCP_MSS;
+    uint32_t resend_room = s->rexmit_cap - s->rexmit_len;
+    if (resend_room == 0u) {
+        pm_metal_coop_task_t *cur = pm_metal_coop_current_task();
+        if (cur != NULL) {
+            s->waiter = cur;
+        }
+        return 0;
+    }
+    if (len > resend_room) {
+        len = resend_room;
+    }
+    uint32_t payload_max = pm_ip_tcp_payload_max(s);
+    if (payload_max == 0) {
+        return -1;
+    }
+    if (len > payload_max) {
+        len = payload_max;
     }
     if (len == 0) {
         return 0;
     }
-    pm_ip_tcp_xmit(s, (uint8_t)(TCP_PSH | TCP_ACK), buf, len);
+    int32_t tx = pm_ip_tcp_xmit(s, (uint8_t)(TCP_PSH | TCP_ACK), buf, len);
+    if (tx == PM_METAL_NET_TX_WAIT) {
+        pm_metal_coop_task_t *cur = pm_metal_coop_current_task();
+        if (cur != NULL) {
+            (void)pm_metal_coop_post_task(cur);
+        }
+        return 0;
+    }
+    if (tx != PM_METAL_NET_TX_OK) {
+        return -1;
+    }
     /* The caller gave us more data than this segment carries: the coroutine
      * must be woken when the peer's ACK frees window space, otherwise it parks
      * at the runner level with no wake source and a large (streamed) body stalls
@@ -874,7 +900,7 @@ int32_t pm_metal_net_ip_send(int32_t fd, const uint8_t *buf, uint32_t len) {
 
 int32_t pm_ip_recv_locked(int32_t fd, uint8_t *buf, uint32_t len) {
     struct pm_metal_sock *s = sock_get(fd, SK_TCP);
-    if (s == NULL || buf == NULL) {
+    if (s == NULL || buf == NULL || s->tcp_error) {
         return -1;
     }
     if (s->rx_len == 0) {

@@ -38,7 +38,9 @@
 #include "extmod/metal/mpconfig_firmware.h"
 
 void pm_metal_boot_motd(void);
+void pm_metal_firmware_idle_poll(void);
 #define MICROPY_PYEXEC_BANNER_HOOK pm_metal_boot_motd()
+#define MICROPY_EVENT_POLL_HOOK do { pm_metal_firmware_idle_poll(); } while (0);
 
 #ifndef MICROPY_REPL_PS1
 #define MICROPY_REPL_PS1 "\033[36m>>>\033[0m "

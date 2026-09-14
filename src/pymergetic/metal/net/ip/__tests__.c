@@ -5,6 +5,7 @@
 #include "pymergetic/metal/drivers/net.h"
 #include "pymergetic/util/limits.h"
 #include "pymergetic/metal/net/ip.h"
+#include "pymergetic/metal/net/ip/__priv__.h"
 #include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/guest.h"
 
@@ -150,6 +151,10 @@ static int32_t case_tcp_lo_echo(void) {
     if (pm_metal_net_ip_send(cl, msg, sizeof(msg)) != 2) {
         return fail("tcp send");
     }
+    if (pm_ip_sock_at(cl) == NULL || pm_ip_sock_at(cl)->snd_una != pm_ip_sock_at(cl)->snd_nxt
+        || pm_ip_sock_at(cl)->rexmit_len != 0u) {
+        return fail("tcp loopback ack accounting");
+    }
     uint8_t buf[8];
     int32_t n = pm_metal_net_ip_recv(sv, buf, sizeof(buf));
     if (n != 2 || buf[0] != 'a') {
@@ -254,6 +259,7 @@ static struct {
     uint32_t arp_asked_for;
     uint32_t bad_csum;
     uint32_t bad_dmac;
+    uint32_t frame_max;
     pm_metal_netdev_ops_t ops;
 } peer;
 
@@ -360,6 +366,11 @@ static void peer_echo_reply(const uint8_t *pkt, uint32_t total) {
     peer_queue(f, (uint16_t)(total + 14u));
 }
 
+static uint32_t peer_frame_max(void *ctx) {
+    (void)ctx;
+    return peer.frame_max;
+}
+
 static int32_t peer_tx(void *ctx, const uint8_t *frame, uint16_t len) {
     uint16_t et;
     (void)ctx;
@@ -435,9 +446,11 @@ static void peer_close(void *ctx) {
 static int32_t peer_up(void) {
     memset(&peer, 0, sizeof(peer));
     peer.h = -1;
+    peer.frame_max = PM_METAL_NET_ETH_FRAME_MAX;
     peer.ops.open = peer_open;
     peer.ops.close = peer_close;
     peer.ops.mac = peer_mac_of;
+    peer.ops.frame_max = peer_frame_max;
     peer.ops.tx = peer_tx;
     peer.ops.poll = peer_poll;
     if (pm_metal_net_l2_attach("iptest", &peer.ops) != 0) {
@@ -554,6 +567,98 @@ static int32_t case_tcp_offbox_csum(void) {
     if (peer.last[14 + 9] != 6u || rd16(peer.last + 14 + 20 + 2) != 80u) {
         return fail("syn shape");
     }
+    return 0;
+}
+
+
+/* A TCP sender must honor the selected netdev's complete-frame capacity. The
+ * old fixed 8192-byte MSS produced frames that every 2048-byte firmware NIC
+ * refused after the TCP sequence had already advanced. */
+static int32_t case_tcp_frame_capacity(void) {
+    struct pm_metal_sock *s;
+    uint8_t body[4096];
+    int32_t fd = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
+    int32_t n;
+    if (fd < 0) {
+        return fail("tcp frame socket");
+    }
+    s = pm_ip_sock_at(fd);
+    if (s == NULL) {
+        return fail("tcp frame row");
+    }
+    s->bound = 1;
+    s->laddr_be = OUR_IP;
+    s->lport = 7204;
+    s->raddr_be = PEER_IP;
+    s->rport = 80;
+    s->l2_h = peer.h;
+    s->tcp_st = TCP_ESTAB;
+    s->snd_nxt = 3000u;
+    s->snd_una = 3000u;
+    s->snd_wnd = sizeof(body);
+    memset(body, 0x5a, sizeof(body));
+    peer.ip_seen = 0;
+    n = pm_metal_net_ip_send(fd, body, sizeof(body));
+    if (n != (int32_t)(PM_METAL_NET_ETH_FRAME_MAX - 14u - 20u - 20u)) {
+        (void)pm_metal_net_ip_close(fd);
+        return fail("tcp did not use netdev frame capacity");
+    }
+    if (peer.ip_seen != 1u || peer.last_len != PM_METAL_NET_ETH_FRAME_MAX) {
+        (void)pm_metal_net_ip_close(fd);
+        return fail("tcp emitted oversized ethernet frame");
+    }
+    (void)pm_metal_net_ip_close(fd);
+    return 0;
+}
+
+/* One sequence-bearing segment owns the resend slot until ACKed. Close retains
+ * the socket through body and FIN acknowledgement. */
+static int32_t case_tcp_reliable_close(void) {
+    struct pm_metal_sock *s;
+    uint8_t body[PM_METAL_NET_ETH_FRAME_MAX];
+    uint8_t ack[20];
+    int32_t fd = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
+    int32_t n;
+    if (fd < 0) return fail("reliable close socket");
+    s = pm_ip_sock_at(fd);
+    if (s == NULL) return fail("reliable close row");
+    s->bound = 1; s->laddr_be = OUR_IP; s->lport = 7205;
+    s->raddr_be = PEER_IP; s->rport = 80; s->l2_h = peer.h;
+    s->tcp_st = TCP_ESTAB; s->snd_nxt = 4000u; s->snd_una = 4000u;
+    s->snd_wnd = sizeof(body) * 2u; s->rcv_nxt = 9000u;
+    memset(body, 0x6b, sizeof(body));
+    n = pm_metal_net_ip_send(fd, body, sizeof(body));
+    if (n != (int32_t)(PM_METAL_NET_ETH_FRAME_MAX - 54u)) return fail("reliable close first segment");
+    if (pm_metal_net_ip_send(fd, body + n, sizeof(body) - (uint32_t)n)
+        != (int32_t)(sizeof(body) - (uint32_t)n)) return fail("reliable close window");
+    if (pm_metal_net_ip_close(fd) != 0 || pm_ip_sock_at(fd) == NULL || !pm_ip_sock_at(fd)->app_closed) return fail("reliable close drop");
+    memset(ack, 0, sizeof(ack));
+    pm_ip_write_be16(ack, 80); pm_ip_write_be16(ack + 2, 7205);
+    pm_ip_write_be32(ack + 4, 9000u); pm_ip_write_be32(ack + 8, 4000u + sizeof(body));
+    ack[12] = 0x50; ack[13] = TCP_ACK; pm_ip_write_be16(ack + 14, 8192u);
+    pm_ip_tcp_input(PEER_IP, OUR_IP, ack, sizeof(ack));
+    s = pm_ip_sock_at(fd);
+    if (s == NULL || !s->fin_sent || s->tcp_st != TCP_FIN_WAIT) return fail("reliable close fin");
+    pm_ip_write_be32(ack + 8, s->snd_nxt);
+    pm_ip_tcp_input(PEER_IP, OUR_IP, ack, sizeof(ack));
+    if (pm_ip_sock_at(fd) != NULL) return fail("reliable close final ack");
+
+    /* Once close() has returned, no coroutine owns the fd. Exhausting FIN
+     * retransmissions must release that row instead of waiting for an owner
+     * that can no longer wake and close it. */
+    fd = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
+    if (fd < 0) return fail("closed timeout socket");
+    s = pm_ip_sock_at(fd);
+    if (s == NULL) return fail("closed timeout row");
+    s->bound = 1; s->laddr_be = OUR_IP; s->lport = 7206;
+    s->raddr_be = PEER_IP; s->rport = 80; s->l2_h = peer.h;
+    s->tcp_st = TCP_FIN_WAIT; s->app_closed = 1u; s->fin_sent = 1u;
+    s->snd_una = 5000u; s->snd_nxt = 5001u;
+    s->rexmit_seq = 5000u; s->rexmit_len = 1u; s->rexmit_end = 5001u;
+    s->rexmit_flags = TCP_FIN; s->rexmit_tries = PM_METAL_IP_REXMIT_TRIES - 1u;
+    s->rexmit_at = 0u;
+    pm_ip_tcp_check_timeouts();
+    if (pm_ip_sock_at(fd) != NULL) return fail("closed timeout retained");
     return 0;
 }
 
@@ -968,6 +1073,12 @@ static int32_t case_offbox(void) {
     }
     if (st == 0) {
         st = case_tcp_offbox_csum();
+    }
+    if (st == 0) {
+        st = case_tcp_frame_capacity();
+    }
+    if (st == 0) {
+        st = case_tcp_reliable_close();
     }
     if (st == 0) {
         st = case_ping_offbox();

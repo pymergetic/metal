@@ -287,4 +287,6 @@ PM_MOD_EXPORT_C(pymergetic.metal.jit.rs, pm_metal_jit_rs_result_free, pm_metal_j
 PM_MOD_EXPORT_C(pymergetic.metal.jit.rs, pm_metal_jit_rs_has_compiler, pm_metal_jit_rs_has_compiler,
     int32_t(void));
 
+#if defined(PM_HAS_MRUSTC) && PM_HAS_MRUSTC
 PM_METAL_EXTERNAL_C(mrustc, "1.90.0");
+#endif

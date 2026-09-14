@@ -429,6 +429,10 @@ static void gmac_mac(void *ctx, uint8_t out[6]) {
     memcpy(out, d->mac, 6);
 }
 
+static uint32_t gmac_frame_max(void *ctx) {
+    return ctx != NULL ? PM_METAL_NET_ETH_FRAME_MAX : 0u;
+}
+
 static int32_t gmac_attach(void) {
     if (s_arena == NULL || s_dev.used) {
         return s_dev.used ? s_dev.net_h : -1;
@@ -437,6 +441,7 @@ static int32_t gmac_attach(void) {
     s_dev.ops.open = gmac_open;
     s_dev.ops.close = gmac_close;
     s_dev.ops.mac = gmac_mac;
+    s_dev.ops.frame_max = gmac_frame_max;
     s_dev.ops.tx = gmac_tx;
     s_dev.ops.poll = gmac_poll;
     s_dev.ops.ctx = &s_dev;

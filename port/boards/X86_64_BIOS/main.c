@@ -136,12 +136,14 @@ static void prove_x86(void) {
         || sec[2] != 'T' || sec[3] != 'L') {
         fail("blk read");
     }
+#if !defined(PM_METAL_UART_REPL)
     if (pm_metal_drivers_unbind(pm_metal_drivers_net_dt_id(h1)) != 0) {
         fail("unbind nic1");
     }
     if (pm_metal_drivers_net_by_compat("virtio-net", 1) >= 0) {
         fail("nic1 gone");
     }
+#endif
     if (pm_metal_drivers_net_by_compat("virtio-net", 0) != h0) {
         fail("nic0");
     }

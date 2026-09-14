@@ -150,6 +150,11 @@ static void sim_mac(void *ctx, uint8_t out[6]) {
     memcpy(out, d->mac, 6);
 }
 
+static uint32_t sim_frame_max(void *ctx) {
+    struct sim_nic *d = ctx;
+    return d != NULL && d->qframe < PM_METAL_NET_ETH_FRAME_MAX ? d->qframe : PM_METAL_NET_ETH_FRAME_MAX;
+}
+
 static int32_t sim_tx(void *ctx, const uint8_t *frame, uint16_t len) {
     struct sim_nic *d = ctx;
     if (d == NULL || frame == NULL || len == 0 || len > d->qframe) {
@@ -168,7 +173,7 @@ static int32_t sim_tx(void *ctx, const uint8_t *frame, uint16_t len) {
         return 0;
     }
     if (d->n >= d->qn) {
-        return -1;
+        return PM_METAL_NET_TX_WAIT;
     }
     i = (d->head + d->n) % d->qn;
     memcpy(sim_slot(d, i), frame, len);
@@ -267,6 +272,7 @@ static int32_t sim_attach(uint32_t unit) {
     d->ops.open = sim_open;
     d->ops.close = sim_close;
     d->ops.mac = sim_mac;
+    d->ops.frame_max = sim_frame_max;
     d->ops.tx = sim_tx;
     d->ops.poll = sim_poll;
     d->ops.ctx = d;

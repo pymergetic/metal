@@ -5,6 +5,7 @@
 #include "pymergetic/metal/boot/__exports__.h"
 #include "pymergetic/metal/services/__exports__.h"
 #include "pymergetic/metal/net/zenoh/__exports__.h"
+#include "pymergetic/metal/net/ip/__exports__.h"
 /* for the mono clock a console tap is stamped with */
 #include "pymergetic/metal/coop.h"
 #include "pymergetic/metal/net/http/asgi.h"
@@ -187,6 +188,8 @@ static uint32_t sorted_ids(uint16_t *idx, uint32_t idx_max) {
     return n;
 }
 
+__attribute__((weak)) int32_t pm_metal_firmware_multi_seen(void) { return -1; }
+
 static void fill_self(js_t *j) {
     uint8_t zid[PM_METAL_NET_ZENOH_ZID_LEN];
     uint32_t nsvc = pm_metal_services_count();
@@ -194,16 +197,24 @@ static void fill_self(js_t *j) {
     uint32_t remote_svc = 0;
     uint32_t i;
     const char *seat = pm_metal_boot_seat();
+    const char *host = "localhost";
+    int multi_seen = pm_metal_firmware_multi_seen();
+    char multi_host[32];
     int have_zid = pm_metal_net_zenoh_zid(zid) == 1;
     for (i = 0; i < nsvc; i++) {
         if (pm_metal_services_peer_of(i) == 0u) local_svc++;
         else remote_svc++;
     }
+    if (multi_seen >= 0) {
+        uint32_t ip = pm_metal_net_ip_if_addr(1);
+        (void)snprintf(multi_host, sizeof(multi_host), "metal-%u", (unsigned)(ip & 0xffu));
+        host = multi_host;
+    }
     js_raw(j, "{\"schema\":1,\"name\":\"pymergetic.metal\",\"role\":\"kernel\",");
     js_raw(j, "\"product\":\"metal\",\"org\":\"pymergetic\",\"theme\":\"metal\",");
     /* peer_id 0 is the explicit loopback identity throughout services: it is
      * this host, never a remote neighbor. */
-    js_raw(j, "\"peer_id\":0,\"local\":true,\"host\":\"localhost\",");
+    js_raw(j, "\"peer_id\":0,\"local\":true,\"host\":"); js_str(j, host); js_ch(j, ',');
     js_raw(j, "\"seat\":"); js_str(j, seat != NULL ? seat : "unknown");
     js_raw(j, ",\"arch\":");
     js_str(j, pm_metal_jit_c_target_arch(PM_METAL_JIT_C_TARGET_SEAT));
@@ -211,6 +222,8 @@ static void fill_self(js_t *j) {
     js_raw(j, ",\"zenoh_zid\":");
     if (have_zid) { js_ch(j, '"'); js_hex(j, zid, sizeof(zid)); js_ch(j, '"'); }
     else js_raw(j, "null");
+    js_raw(j, ",\"wire_peer_seen\":");
+    if (multi_seen < 0) js_raw(j, "null"); else js_raw(j, multi_seen ? "true" : "false");
     js_raw(j, ",\"neighbor_count\":"); js_u32(j, pm_metal_neighbors_count());
     js_raw(j, ",\"services\":"); js_u32(j, nsvc);
     js_raw(j, ",\"local_services\":"); js_u32(j, local_svc);
@@ -728,6 +741,7 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
 /* P2P endpoint fillers — live JSON from each neighbour/orchestration card. */
 static void fill_neighbors(js_t *j, const char *raw);
 static void fill_services(js_t *j);
+
 static void fill_rpc_handlers(js_t *j);
 static void fill_rpc_calls(js_t *j);
 static void fill_dstate_entries(js_t *j);

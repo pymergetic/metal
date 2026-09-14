@@ -251,6 +251,8 @@ MRUSTC_A := $(MRUSTC_DIR)/bin/mrustc.a
 MRUSTC_COMMON_A := $(MRUSTC_DIR)/bin/common_lib.a
 MRUSTC_EMBED_DIR := $(CURDIR)/tools/mrustc_embed
 MRUSTC_EMBED_O := $(CURDIR)/build/mrustc_embed.o
+MRUSTC_MANIFEST := $(MRUSTC_DIR)/__pmm__.toml
+MRUSTC_SRCS := $(addprefix $(MRUSTC_DIR)/,$(shell $(CURDIR)/tools/externals.sh list mrustc))
 MRUSTC_CXXFLAGS := -std=c++14 -O2 -g -Wall -Wno-unused-parameter -Wno-sign-compare \
 	-I $(MRUSTC_DIR)/src/include -I $(MRUSTC_DIR)/src -I $(MRUSTC_DIR)/tools/common \
 	-I $(MRUSTC_EMBED_DIR)
@@ -289,6 +291,12 @@ $(CURDIR)/build/tcc/libtcc1_stdatomic.o: $(TCC_DIR)/lib/stdatomic.c
 # cross that seam.
 
 # mrustc in-process embed shim: compile the C++ shim that drives mrustc.a
+$(MRUSTC_A): $(MRUSTC_SRCS) $(MRUSTC_MANIFEST)
+	$(MAKE) -C $(MRUSTC_DIR) bin/mrustc.a
+
+$(MRUSTC_COMMON_A): $(MRUSTC_DIR)/tools/common/debug.cpp $(MRUSTC_DIR)/tools/common/jobserver.cpp $(MRUSTC_DIR)/tools/common/path.cpp $(MRUSTC_DIR)/tools/common/toml.cpp
+	$(MAKE) -C $(MRUSTC_DIR)/tools/common
+
 $(MRUSTC_EMBED_O): $(MRUSTC_EMBED_DIR)/mrustc_embed.cpp $(MRUSTC_EMBED_DIR)/mrustc_embed.h $(MRUSTC_A) $(MRUSTC_COMMON_A)
 	mkdir -p $(dir $@)
 	$(CXX) $(MRUSTC_CXXFLAGS) -c -o $@ $<
@@ -300,17 +308,16 @@ BENCH_OUT := $(CURDIR)/build/metal-async-bench
 # build card's ELF link path is in-process here too — the feed's --link mode
 # is what closes the Rust -> C -> TCC -> link loop with no host cc.
 SELFHOST_FEED := $(CURDIR)/build/selfhost_feed
-# emcc from PATH, or $EMSDK/upstream/emscripten — do not bake a home directory.
-ifneq ($(wildcard $(EMSDK)/upstream/emscripten/emcc),)
-BROWSER_PATH := $(EMSDK)/upstream/emscripten:$(PATH)
-else
-BROWSER_PATH := $(PATH)
-endif
+# Pinned host toolchain resolver. The compiler is build provenance, not a
+# runtime external row: it produces the browser seat but is not linked into it.
+EMSCRIPTEN_TOOL := $(CURDIR)/tools/emscripten.py
+EMSCRIPTEN_PIN := $(CURDIR)/tools/emscripten.version
+BROWSER_PATH = $(shell $(EMSCRIPTEN_TOOL) path)
 WASM_UPY := $(TOP)/ports/webassembly/build-metal/micropython.mjs
 WS ?= $(abspath $(TOP)/../..)
 VSCODE_CDB ?= $(WS)/.vscode/compile_commands.json
 
-.PHONY: test bench prove-all clean compile-commands gen metal-lib upy browser firmware firmware-prove firmware-check menu help menu-list FORCE prove-zpico selfhost ksweep rsx-probe rsx-dump rsx-hwm rsx-span wasm32-prove selfhost-feed cppx-feed cppx-self selfhost-self
+.PHONY: test bench prove-all clean compile-commands gen metal-lib upy browser browser-toolchain-check external-manifest-check external-source-check firmware firmware-prove firmware-check menu help menu-list FORCE prove-zpico selfhost ksweep rsx-probe rsx-dump rsx-hwm rsx-span wasm32-prove selfhost-feed cppx-feed cppx-self selfhost-self
 
 FORCE:
 
@@ -549,12 +556,13 @@ prove-zpico:
 # backend shipped a lane that emitted modules an engine loaded and computed
 # the wrong answers from. It is cheap (one libtcc build) and it pins what
 # that backend can and cannot lower.
-prove-all: $(OUT) firmware-check
+prove-all: browser-toolchain-check external-manifest-check $(OUT) firmware-check
 	$(OUT)
 	$(MAKE) wasm32-prove
 	$(MAKE) firmware-prove
 	$(MAKE) upy
 	$(MAKE) browser
+	$(MAKE) external-source-check
 
 firmware:
 	$(MAKE) -C $(CURDIR)/port BOARD=X86_64_BIOS all
@@ -624,9 +632,18 @@ upy:
 	! grep -q "nothing booted" $(CURDIR)/build/upy_shutdown.log
 	@echo upy shutdown unwound the boot graph ok
 
-browser:
+browser-toolchain-check: $(EMSCRIPTEN_TOOL) $(EMSCRIPTEN_PIN)
+	$(EMSCRIPTEN_TOOL) check
+
+external-manifest-check:
+	$(CURDIR)/tools/externals.sh check --drift
+
+external-source-check: external-manifest-check
+	python3 $(CURDIR)/tools/external_seat_check.py
+
+browser: browser-toolchain-check external-manifest-check
+	$(EMSCRIPTEN_TOOL) prepare $(TOP)/ports/webassembly/build-metal
 	mkdir -p $(CURDIR)/build
-	PATH="$(BROWSER_PATH)" bash -c 'command -v emcc >/dev/null || { echo "emcc not on PATH; set EMSDK to an emsdk checkout" >&2; exit 1; }'
 	PATH="$(BROWSER_PATH)" \
 		$(MAKE) -C $(TOP)/ports/webassembly MICROPY_PY_WASM=1 MICROPY_PY_METAL=1 BUILD=build-metal
 	$(NODE) $(CURDIR)/upy_browser_prove.mjs $(WASM_UPY) $(CURDIR)/upy_browser_prove.py \
@@ -697,3 +714,16 @@ clean:
 # mbedtls, zenoh. (The vendored TCC instances carry their dependency list in
 # the manifest instead: tools/tcc.mk's TCC_HDRS.)
 -include $(shell find $(CURDIR)/build -name '*.d' 2>/dev/null)
+
+.PHONY: multi-e2e multi-run
+multi-e2e: firmware
+	$(MAKE) -C port BOARD=X86_64_UEFI REPL=1 all
+	rm -f port/build/X86_64_UEFI-mp-repl/esp.img
+	$(MAKE) -C port -f boards/X86_64_UEFI/build.mk BUILD=build/X86_64_UEFI-mp-repl BOARD=X86_64_UEFI ENGINE=mp REPL=1 build/X86_64_UEFI-mp-repl/esp.img
+	port/multi/run_two_uefi.sh
+
+multi-run: firmware
+	$(MAKE) -C port BOARD=X86_64_UEFI REPL=1 all
+	rm -f port/build/X86_64_UEFI-mp-repl/esp.img
+	$(MAKE) -C port -f boards/X86_64_UEFI/build.mk BUILD=build/X86_64_UEFI-mp-repl BOARD=X86_64_UEFI ENGINE=mp REPL=1 build/X86_64_UEFI-mp-repl/esp.img
+	KEEP=1 port/multi/run_two_uefi.sh

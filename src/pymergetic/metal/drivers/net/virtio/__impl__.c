@@ -199,6 +199,11 @@ static void virtio_mac(void *ctx, uint8_t out[6]) {
     memcpy(out, d->mac, 6);
 }
 
+static uint32_t virtio_frame_max(void *ctx) {
+    struct vnet *d = ctx;
+    return d != NULL && d->qframe < PM_METAL_NET_ETH_FRAME_MAX ? d->qframe : PM_METAL_NET_ETH_FRAME_MAX;
+}
+
 static int32_t virtio_tx(void *ctx, const uint8_t *frame, uint16_t len) {
     struct vnet *d = ctx;
     uint16_t pending;
@@ -213,7 +218,7 @@ static int32_t virtio_tx(void *ctx, const uint8_t *frame, uint16_t len) {
 #endif
     pending = (uint16_t)(d->tx_avail - d->tx_used);
     if (pending >= d->qn) {
-        return -1;
+        return PM_METAL_NET_TX_WAIT;
     }
     i = (uint16_t)(d->tx_avail % d->qn);
     memset(vnet_tx_slot(d, i), 0, VNET_HDR);
@@ -303,6 +308,7 @@ static int32_t vnet_attach(int32_t bus, uint32_t loc0, uint32_t loc1, uint32_t l
     d->ops.open = virtio_open;
     d->ops.close = virtio_close;
     d->ops.mac = virtio_mac;
+    d->ops.frame_max = virtio_frame_max;
     d->ops.tx = virtio_tx;
     d->ops.poll = virtio_poll;
     d->ops.ctx = d;
@@ -590,7 +596,7 @@ static int32_t fw_vnet_tx(struct vnet *d, const uint8_t *frame, uint16_t len) {
             continue;
         }
         if (spins >= FW_TX_SPINS) {
-            return -1;
+            return PM_METAL_NET_TX_WAIT;
         }
         pm_cpu_pause();
     }
@@ -680,7 +686,6 @@ static int32_t fw_vnet_attach_pci(uint32_t bus, uint32_t dev, uint32_t fn) {
     uint32_t notify_mult;
     uint32_t id;
     struct vnet *d;
-    uint32_t i;
     uint32_t feat0;
     uint32_t feat1;
     if (virtio_pci_caps(bus, dev, fn, &common, &notify, &notify_mult, &devcfg) != 0) {
@@ -740,6 +745,7 @@ static int32_t fw_vnet_attach_pci(uint32_t bus, uint32_t dev, uint32_t fn) {
     d->ops.open = virtio_open;
     d->ops.close = virtio_close;
     d->ops.mac = virtio_mac;
+    d->ops.frame_max = virtio_frame_max;
     d->ops.tx = virtio_tx;
     d->ops.poll = virtio_poll;
     d->ops.ctx = d;

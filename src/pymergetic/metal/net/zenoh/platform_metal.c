@@ -30,7 +30,6 @@
 /* Bounded cooperative-spin budget, in microseconds (matches the net.ip ping4
  * pattern). A monotonic-counter seat ticks quickly; the spin count caps it. */
 #define PM_METAL_NET_ZENOH_CONNECT_WAIT_US 2000000u   /* 2 s for TCP ESTAB */
-#define PM_METAL_NET_ZENOH_YIELD_SPINS 128u           /* hard cap per wait round */
 
 /*------------------ IPv4 helpers ------------------*/
 
@@ -194,7 +193,6 @@ z_result_t _z_open_tcp(_z_sys_net_socket_t *sock, const _z_sys_net_endpoint_t re
     int32_t fd;
     int32_t establ;
     uint64_t deadline;
-    uint32_t spins = 0;
     if (sock == NULL) {
         _Z_ERROR_RETURN(_Z_ERR_INVALID);
     }
@@ -221,8 +219,12 @@ z_result_t _z_open_tcp(_z_sys_net_socket_t *sock, const _z_sys_net_endpoint_t re
     }
     /* crc == 0: SYN in flight. Wait for the SYN/ACK handshake with a bounded
      * cooperative spin. */
-    deadline = pm_metal_coop_mono_us() + (uint64_t)(tout ? tout : PM_METAL_NET_ZENOH_CONNECT_WAIT_US);
-    while (spins < PM_METAL_NET_ZENOH_YIELD_SPINS) {
+    /* Zenoh's socket timeout is milliseconds; the Metal monotonic clock is
+     * microseconds. Waiting only `tout` microseconds made the cross-guest TCP
+     * SYN race a 100 us deadline. */
+    deadline = pm_metal_coop_mono_us() +
+        (tout ? (uint64_t)tout * 1000ull : PM_METAL_NET_ZENOH_CONNECT_WAIT_US);
+    for (;;) {
         (void)pm_metal_net_ip_pump();
         establ = pm_metal_net_ip_established(fd);
         if (establ == 1) {
@@ -237,7 +239,6 @@ z_result_t _z_open_tcp(_z_sys_net_socket_t *sock, const _z_sys_net_endpoint_t re
             break;
         }
         pm_metal_net_zenoh_yield();
-        spins++;
     }
     (void)pm_metal_net_ip_close(fd);
     sock->_fd = -1;

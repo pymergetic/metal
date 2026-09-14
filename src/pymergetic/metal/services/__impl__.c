@@ -18,9 +18,15 @@
 
 #include "pymergetic/util/limits.h"
 #include "pymergetic/util/mem.h"
+#include "pymergetic/metal/net/neighbors/__exports__.h"
+#include "pymergetic/metal/net/zenoh/__exports__.h"
+#include "pymergetic/metal/net/ip/__exports__.h"
+#include "pymergetic/metal/coop/__exports__.h"
 
 #include <string.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #define PM_METAL_SERVICES_PRE_N 4u
 #ifndef PM_METAL_SERVICES_MAX
@@ -40,6 +46,8 @@ static uint32_t s_nsvc;
 
 PM_UTIL_LIMIT_C(pm_services_limit, pymergetic.metal.services, count,
     PM_METAL_SERVICES_MAX, 0u, &s_nsvc);
+
+void pm_metal_services_publish_deinit(void);
 
 int32_t pm_metal_services_init(pm_util_mem_arena_t *arena) {
     uint32_t cap;
@@ -72,6 +80,7 @@ int32_t pm_metal_services_init(pm_util_mem_arena_t *arena) {
 }
 
 void pm_metal_services_deinit(void) {
+    pm_metal_services_publish_deinit();
     s_nsvc = 0;
     s_svcs = NULL;
     s_svcs_cap = 0u;
@@ -114,6 +123,19 @@ int32_t pm_metal_services_register_remote(const char *name, const char *fqn,
     }
     if (name == NULL || fqn == NULL || peer_id == 0) {
         return -1;
+    }
+    {
+        uint32_t i;
+        for (i = 0; i < s_nsvc; i++) {
+            if ((s_svcs[i].flags & PM_METAL_SERVICE_REMOTE) != 0u
+                    && s_svcs[i].peer_id == peer_id
+                    && strcmp(s_svcs[i].name, name) == 0) {
+                s_svcs[i].port = port;
+                strncpy(s_svcs[i].fqn, fqn, sizeof(s_svcs[i].fqn) - 1u);
+                s_svcs[i].fqn[sizeof(s_svcs[i].fqn) - 1u] = '\0';
+                return 0;
+            }
+        }
     }
     if (s_nsvc >= s_svcs_cap) {
         return -1;
@@ -264,65 +286,107 @@ int32_t pm_metal_services_start(uint32_t i) {
     return rec->svc != NULL ? rec->svc->listen(rec->svc->default_addr, rec->svc->default_port) : -1;
 }
 
-/* -- services-to-neighbors bridge --
- * Called after both zenoh and neighbors are up. Stores the zenoh session
- * handle (opaque void *) for later publish calls. Returns 0 on success.
- * Zenoh is initialized after services, so this is a separate init step. */
-static void *s_zenoh_session;
+/* -- services-to-neighbors bridge ---------------------------------------
+ * One bounded text record per local service, carried by real zenoh PUTs:
+ *   zidhex|host|name|fqn|port
+ * The key is metal/services/<zid>. Repeated records are upserts, so periodic
+ * publication repairs loss and reconnect without duplicate registry rows. */
+static uint8_t s_mesh_started;
+static uint64_t s_mesh_next_us;
+static uint64_t s_mesh_burst_until_us;
+static char s_mesh_host[64];
 
-int32_t pm_metal_services_publish_init(void *zenoh_session) {
-    if (zenoh_session == NULL || s_zenoh_session != NULL) {
-        return -1;
+static void zid_hex(const uint8_t zid[16], char out[33]) {
+    static const char h[] = "0123456789abcdef";
+    uint32_t i;
+    for (i = 0; i < 16u; i++) {
+        out[i * 2u] = h[zid[i] >> 4];
+        out[i * 2u + 1u] = h[zid[i] & 15u];
     }
-    s_zenoh_session = zenoh_session;
-    return 0;
+    out[32] = 0;
 }
 
-int32_t pm_metal_services_publish_local(uint32_t idx) {
-    const pm_metal_service_record_t *rec = pm_metal_services_record_at(idx);
-    if (rec == NULL) {
-        return -1;
+static void mesh_recv(const char *key, size_t klen, const uint8_t *payload,
+        size_t plen, void *arg) {
+    char row[384];
+    char *zid, *host, *name, *fqn, *port_s;
+    char *save = NULL;
+    int32_t peer;
+    (void)key; (void)klen; (void)arg;
+    if (payload == NULL || plen == 0u || plen >= sizeof(row)) return;
+    memcpy(row, payload, plen); row[plen] = 0;
+    zid = strtok_r(row, "|", &save); host = strtok_r(NULL, "|", &save);
+    name = strtok_r(NULL, "|", &save); fqn = strtok_r(NULL, "|", &save);
+    port_s = strtok_r(NULL, "|", &save);
+    if (zid == NULL || host == NULL || name == NULL || fqn == NULL || port_s == NULL) return;
+    {
+        uint8_t own[16]; char own_hex[33];
+        if (pm_metal_net_zenoh_zid(own) == 1) {
+            zid_hex(own, own_hex);
+            if (strcmp(own_hex, zid) == 0) return;
+        }
     }
-    if (s_zenoh_session == NULL) {
-        return -1;
+    peer = pm_metal_neighbors_add(zid, host,
+        PM_METAL_NEIGHBOR_CAP_HAS_ZENOH | PM_METAL_NEIGHBOR_CAP_HAS_SERVICES);
+    if (peer > 0) {
+        (void)pm_metal_neighbors_seen(zid);
+        (void)pm_metal_services_register_remote(name, fqn,
+            (uint16_t)strtoul(port_s, NULL, 10), (uint32_t)peer);
     }
-    /* Placeholder: walks local services and publishes to zenoh via swarm pub.
-     * The real zenoh publish call: pm_metal_net_zenoh_put(key, data, len)
-     * Until the swarm pub is fully wired, this is a no-op success. */
+}
+
+int32_t pm_metal_services_mesh_start(const char *host) {
+    if (s_mesh_started) return 0;
+    if (host == NULL || host[0] == 0) return -1;
+    strncpy(s_mesh_host, host, sizeof(s_mesh_host) - 1u);
+    s_mesh_host[sizeof(s_mesh_host) - 1u] = 0;
+    if (pm_metal_net_zenoh_subscribe("metal/services/**", mesh_recv, NULL) != 1) return -1;
+    s_mesh_started = 1u;
+    s_mesh_next_us = 0u;
+    /* Both firmware seats open independently. Publish rapidly during the
+     * initial convergence window so neither side can miss the other's roster
+     * before its subscriber declaration reaches the peer. */
+    s_mesh_burst_until_us = pm_metal_coop_mono_us() + 10000000ull;
     return 0;
 }
 
 int32_t pm_metal_services_publish_all(void) {
-    uint32_t i;
-    int32_t rc = 0;
-    if (s_zenoh_session == NULL) {
-        return -1;
-    }
+    uint8_t zid[16]; char zh[33]; char key[64]; char row[384];
+    uint32_t i; int32_t rc = 0;
+    if (!s_mesh_started || pm_metal_net_zenoh_zid(zid) != 1) return -1;
+    zid_hex(zid, zh);
+    (void)snprintf(key, sizeof(key), "metal/services/%s", zh);
     for (i = 0; i < s_nsvc; i++) {
-        if (s_svcs[i].flags & PM_METAL_SERVICE_LOCAL) {
-            int32_t r = pm_metal_services_publish_local(i);
-            if (r != 0) {
-                rc = r;
-            }
-        }
+        const pm_metal_service_record_t *r = &s_svcs[i];
+        int n;
+        if ((r->flags & PM_METAL_SERVICE_LOCAL) == 0u || r->svc == NULL) continue;
+        n = snprintf(row, sizeof(row), "%s|%s|%s|%s|%u", zh, s_mesh_host,
+            r->svc->name, r->svc->fqn, (unsigned)r->svc->default_port);
+        if (n <= 0 || (size_t)n >= sizeof(row)
+                || pm_metal_net_zenoh_put(key, (const uint8_t *)row, (uint32_t)n) != 1) rc = -1;
     }
     return rc;
 }
 
-int32_t pm_metal_services_discover_peer_services(const char *zenoh_id, uint32_t peer_id) {
-    if (s_zenoh_session == NULL) {
-        return -1;
+void pm_metal_services_mesh_poll(void) {
+    uint64_t now;
+    if (!s_mesh_started) return;
+    now = pm_metal_coop_mono_us();
+    if (now >= s_mesh_next_us) {
+        (void)pm_metal_services_publish_all();
+        s_mesh_next_us = now + (now < s_mesh_burst_until_us ? 50000ull : 500000ull);
     }
-    (void)zenoh_id;
-    (void)peer_id;
-    /* Placeholder: query the peer via zenoh queryable for its service list,
-     * then register each as a remote service via pm_metal_services_register_remote().
-     * Until the swarm queryable is fully wired, this is a no-op success. */
-    return 0;
 }
 
+int32_t pm_metal_services_publish_init(void *unused) { (void)unused; return 0; }
+int32_t pm_metal_services_publish_local(uint32_t idx) { (void)idx; return pm_metal_services_publish_all(); }
+int32_t pm_metal_services_discover_peer_services(const char *zid, uint32_t peer) {
+    (void)zid; (void)peer; return s_mesh_started ? 0 : -1;
+}
 void pm_metal_services_publish_deinit(void) {
-    s_zenoh_session = NULL;
+    s_mesh_started = 0u;
+    s_mesh_next_us = 0u;
+    s_mesh_burst_until_us = 0u;
 }
 
 #include "pymergetic/wasmmod/guest.h"
@@ -333,6 +397,8 @@ PM_MOD_EXPORT_C(pymergetic.metal.services, pm_metal_services_drop_peer, pm_metal
 PM_MOD_EXPORT_C(pymergetic.metal.services, pm_metal_services_peer_of, pm_metal_services_peer_of, uint32_t(uint32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.services, pm_metal_services_publish_init, pm_metal_services_publish_init, int32_t(void *));
 PM_MOD_EXPORT_C(pymergetic.metal.services, pm_metal_services_publish_all, pm_metal_services_publish_all, int32_t(void));
+PM_MOD_EXPORT_C(pymergetic.metal.services, pm_metal_services_mesh_start, pm_metal_services_mesh_start, int32_t(const char *));
+PM_MOD_EXPORT_C(pymergetic.metal.services, pm_metal_services_mesh_poll, pm_metal_services_mesh_poll, void(void));
 PM_MOD_EXPORT_C(pymergetic.metal.services, pm_metal_services_discover_peer_services, pm_metal_services_discover_peer_services, int32_t(const char *, uint32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.services, pm_metal_services_count, pm_metal_services_count, uint32_t(void));
 PM_MOD_EXPORT_C(pymergetic.metal.services, pm_metal_services_name, pm_metal_services_name, const char *(uint32_t));

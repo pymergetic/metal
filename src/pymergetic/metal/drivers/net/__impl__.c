@@ -216,15 +216,24 @@ int32_t pm_metal_drivers_net_poll_all(void) {
     return 0;
 }
 
+uint32_t pm_metal_drivers_net_frame_max(int32_t h) {
+    uint32_t n;
+    if (h < 0 || (uint32_t)h >= s_dev_cap || !s_dev[h].used || s_dev[h].ops.frame_max == NULL) {
+        return 0;
+    }
+    n = s_dev[h].ops.frame_max(s_dev[h].ops.ctx);
+    return n <= UINT16_MAX ? n : UINT16_MAX;
+}
+
 int32_t pm_metal_drivers_net_tx(int32_t h, const uint8_t *frame, uint16_t len) {
     if (h < 0 || (uint32_t)h >= s_dev_cap || !s_dev[h].used || s_dev[h].ops.tx == NULL) {
         return -1;
     }
     {
         int32_t st = s_dev[h].ops.tx(s_dev[h].ops.ctx, frame, len);
-        if (st == 0) {
+        if (st == PM_METAL_NET_TX_OK) {
             s_dev[h].tx_n++;
-        } else {
+        } else if (st == PM_METAL_NET_TX_ERROR) {
             s_dev[h].tx_err++;
         }
         return st;
@@ -283,6 +292,7 @@ PM_MOD_EXPORT_C(pymergetic.metal.drivers.net, pm_metal_drivers_net_by_dt, pm_met
 PM_MOD_EXPORT_C(pymergetic.metal.drivers.net, pm_metal_drivers_net_by_compat, pm_metal_drivers_net_by_compat, int32_t(const char *, int32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.drivers.net, pm_metal_drivers_net_poll, pm_metal_drivers_net_poll, int32_t(int32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.drivers.net, pm_metal_drivers_net_poll_all, pm_metal_drivers_net_poll_all, int32_t(void));
+PM_MOD_EXPORT_C(pymergetic.metal.drivers.net, pm_metal_drivers_net_frame_max, pm_metal_drivers_net_frame_max, uint32_t(int32_t));
 PM_MOD_EXPORT_C(pymergetic.metal.drivers.net, pm_metal_drivers_net_tx, pm_metal_drivers_net_tx, int32_t(int32_t, const uint8_t *, uint16_t));
 PM_MOD_EXPORT_C(pymergetic.metal.drivers.net, pm_metal_drivers_net_mac, pm_metal_drivers_net_mac, void(int32_t, uint8_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.drivers.net, pm_metal_drivers_net_count_rx, pm_metal_drivers_net_count_rx, void(int32_t));

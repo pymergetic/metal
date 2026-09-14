@@ -150,14 +150,14 @@ void pm_ip_output(const uint8_t *pkt, uint32_t len) {
     pm_ip_output_via(-1, pkt, len);
 }
 
-void pm_ip_output_via(int32_t h_hint, const uint8_t *pkt, uint32_t len) {
+int32_t pm_ip_output_via(int32_t h_hint, const uint8_t *pkt, uint32_t len) {
     uint32_t dst;
     uint32_t hop = 0;
     uint32_t mask;
     int32_t h;
     uint8_t dmac[6];
     if (len < 20u || len > PM_METAL_IP_PKT_MAX) {
-        return;
+        return -1;
     }
     dst = pm_ip_read_be32(pkt + 16);
     if (pm_ip_lo_up && (dst == pm_ip_lo_addr_be || dst == 0x7f000001u)) {
@@ -169,7 +169,7 @@ void pm_ip_output_via(int32_t h_hint, const uint8_t *pkt, uint32_t len) {
         pm_ip_rx_l2 = -1;
         ip_input(pkt, len);
         pm_ip_rx_l2 = prev_l2;
-        return;
+        return 0;
     }
     if (pm_ip_lo_up && (dst & 0xf0000000u) == 0xe0000000u) {
         /* Multicast on loopback: the joined subscribers live in this stack, so
@@ -180,11 +180,11 @@ void pm_ip_output_via(int32_t h_hint, const uint8_t *pkt, uint32_t len) {
         pm_ip_rx_l2 = -1;
         ip_input(pkt, len);
         pm_ip_rx_l2 = prev_l2;
-        return;
+        return 0;
     }
     h = pm_ip_route_out(h_hint, pm_ip_read_be32(pkt + 12), dst, &hop);
     if (h < 0) {
-        return;
+        return 0;
     }
     mask = pm_ip_l2_mask_of(h);
     if ((dst & 0xf0000000u) == 0xe0000000u) {
@@ -208,9 +208,9 @@ void pm_ip_output_via(int32_t h_hint, const uint8_t *pkt, uint32_t len) {
          * neighbour answers. Guessing a MAC is what the old code did. */
         pm_ip_arp_queue(h, hop, pkt, len);
         pm_ip_arp_ask(h, hop);
-        return;
+        return 0;
     }
-    pm_ip_eth_tx(h, dmac, 0x0800u, pkt, len);
+    return pm_ip_eth_tx(h, dmac, 0x0800u, pkt, len);
 }
 
 static void ip_input(const uint8_t *pkt, uint32_t len) {

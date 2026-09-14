@@ -5,6 +5,11 @@
 #include "pymergetic/metal/console.h"
 #include "pymergetic/metal/net/http/asgi.h"
 #include "pymergetic/metal/net/ssh.h"
+#include "pymergetic/metal/net/ip.h"
+#include "pymergetic/metal/net/zenoh.h"
+#include "pymergetic/metal/services.h"
+#include "pymergetic/metal/drivers/net.h"
+#include "pymergetic/metal/coop.h"
 #include "ports/micropython/finder.h"
 #include "ports/micropython/importhook.h"
 #include "pymergetic/wasmmod/pyexport.h"
@@ -21,6 +26,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 void uart_write(const char *s, size_t n);
@@ -178,6 +184,98 @@ int pm_wasmmod_pyexport_bind_module(const char *fqn, pm_wasmmod_py_obj_t module)
     return 0;
 }
 
+
+static uint8_t s_multi_mesh;
+static uint8_t s_multi_configured;
+static char s_multi_host[32];
+static int32_t s_multi_udp = -1;
+static uint32_t s_multi_ip;
+static uint8_t s_multi_seen;
+
+void pm_metal_firmware_idle_poll(void) {
+    static uint8_t polling;
+    uint8_t ping = 0x5au;
+    uint8_t rb[4];
+    uint32_t from = 0;
+    uint16_t port = 0;
+    if (polling) return;
+    polling = 1u;
+    pm_metal_coop_poll();
+    if (s_multi_udp >= 0) {
+        uint32_t peer = (s_multi_ip & 0xffu) == 11u ? 0x0a00000cu : 0x0a00000bu;
+        (void)pm_metal_net_ip_sendto(s_multi_udp, &ping, 1u, peer, 7450u);
+        if (pm_metal_net_ip_recvfrom(s_multi_udp, rb, sizeof(rb), &from, &port) == 1
+                && rb[0] == ping && from == peer) s_multi_seen = 1u;
+    }
+    if (s_multi_configured) {
+        if (!s_multi_mesh) {
+            /* Mesh startup is readiness-driven: listener OPEN succeeds first;
+             * the connector may need several idle turns while both independent
+             * guests pump TCP and the Zenoh INIT/OPEN exchange. */
+            if (pm_metal_services_mesh_start(s_multi_host) == 0) {
+                s_multi_mesh = 1u;
+                (void)pm_metal_services_publish_all();
+            } else {
+                (void)pm_metal_net_zenoh_poll();
+            }
+        } else {
+            (void)pm_metal_net_zenoh_poll();
+            pm_metal_services_mesh_poll();
+        }
+    }
+    polling = 0u;
+}
+
+int32_t pm_metal_firmware_multi_seen(void) { return s_multi_seen ? 1 : 0; }
+
+int32_t pm_metal_firmware_mesh_ready(void) {
+    if (!s_multi_configured) return -1;
+    if (!s_multi_mesh && pm_metal_services_mesh_start(s_multi_host) == 0) {
+        s_multi_mesh = 1u;
+        (void)pm_metal_services_publish_all();
+    }
+    return s_multi_mesh ? 0 : -1;
+}
+
+static void firmware_multi_start(void) {
+    uint8_t mac[6];
+    uint32_t lan;
+    uint32_t self;
+    int32_t slot;
+    int32_t lan_h = -1;
+    for (slot = 0; slot < 64; slot++) {
+        int32_t dt = pm_metal_drivers_net_dt_id(slot);
+        int32_t h;
+        if (dt < 0) continue;
+        h = pm_metal_drivers_net_by_dt(dt);
+        if (h < 0) continue;
+        memset(mac, 0, sizeof(mac));
+        pm_metal_drivers_net_mac(h, mac);
+        if (mac[0] == 0x52u && mac[1] == 0x54u && mac[3] == 0x70u && mac[5] != 0u) {
+            lan_h = h;
+            break;
+        }
+    }
+    if (lan_h < 0) return;
+    lan = 0x0a000000u | (uint32_t)mac[5];
+    if (pm_metal_net_ip_if_up_mask(lan_h, lan, 0xffffff00u) != 0) return;
+    self = lan & 0xffu;
+    s_multi_ip = lan;
+    s_multi_udp = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_DGRAM);
+    if (s_multi_udp < 0 || pm_metal_net_ip_bind(s_multi_udp, lan, 7450u) != 0) return;
+    (void)snprintf(s_multi_host, sizeof(s_multi_host), "metal-%u", (unsigned)self);
+    mp_printf(&mp_plat_print, "multi mesh configuring host=%s\n", s_multi_host);
+    (void)pm_metal_net_zenoh_sel(0);
+    if (self == 11u) {
+        if (pm_metal_net_zenoh_peer(lan, 7447u, 1u) != 0) return;
+    } else if (self == 12u) {
+        if (pm_metal_net_zenoh_peer(0x0a00000bu, 7447u, 0u) != 0) return;
+    } else return;
+    s_multi_configured = 1u;
+    mp_printf(&mp_plat_print, "multi mesh configured host=%s ip=10.0.0.%u\n",
+        s_multi_host, (unsigned)self);
+}
+
 mp_uint_t mp_hal_stdout_tx_strn(const char *str, size_t len) {
     uint32_t n = len > 0xffffffffu ? 0xffffffffu : (uint32_t)len;
     (void)pm_metal_console_write(str, n);
@@ -302,6 +400,11 @@ int pm_metal_firmware_upy(void)
 #endif
     }
 #if MICROPY_HELPER_REPL
+    /* The embedded seat proof above checks the pre-open swarm faces. Configure
+     * the two-node transport only after that contract has run; doing it before
+     * the proof let the listener node's idle poll open membership concurrently,
+     * so node A failed while the slower connector node passed. */
+    firmware_multi_start();
     readline_init0();
     /* Interactive run seat (REPL=1): bring up the inspect httpd (:8090) and the
      * ssh console (:2222) so the box serves the moment it boots. Both listeners

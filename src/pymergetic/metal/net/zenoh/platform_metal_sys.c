@@ -114,7 +114,7 @@ z_clock_t z_clock_now(void) {
 
 unsigned long zp_clock_elapsed_us_since(z_clock_t *instant, z_clock_t *epoch) {
     uint64_t d = *instant > *epoch ? *instant - *epoch : 0;
-    return (unsigned long)(d / 1000ull);
+    return (unsigned long)d;
 }
 
 unsigned long zp_clock_elapsed_ms_since(z_clock_t *instant, z_clock_t *epoch) {

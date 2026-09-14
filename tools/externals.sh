@@ -6,7 +6,8 @@
 # externals/ holding __pmm__.toml is an external.
 #
 #   externals.sh list <name>   print the manifest's sources, one per line
-#   externals.sh check         validate every manifest; every file must exist
+#   externals.sh check [--drift] validate every manifest and optionally compare
+#                                its source list with fresh tree discovery
 #   externals.sh gen <name>    regenerate the sources array from the tree
 #
 # gen encodes each external's own discovery rule, so the array is regenerable
@@ -155,11 +156,25 @@ list)
     sources_of "$2"
     ;;
 check)
+    verify_drift=0
+    [ "${2-}" = "--drift" ] && verify_drift=1
     drift=0
     for m in "$root"/*/__pmm__.toml; do
         [ -f "$m" ] || continue
         name=$(basename "$(dirname "$m")")
         check_manifest "$name" || drift=1
+        if [ "$verify_drift" -eq 1 ]; then
+            expected=$(mktemp)
+            actual=$(mktemp)
+            discover "$name" >"$expected"
+            sources_of "$name" >"$actual"
+            if ! cmp -s "$expected" "$actual"; then
+                echo "externals.sh: $name source manifest drift (run: tools/externals.sh gen $name)" >&2
+                diff -u "$actual" "$expected" >&2 || true
+                drift=1
+            fi
+            rm -f "$expected" "$actual"
+        fi
     done
     [ "$drift" -eq 0 ] || exit 1
     exit 0
