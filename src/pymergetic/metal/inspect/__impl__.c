@@ -2888,6 +2888,7 @@ static int32_t build_object_bytes_asgi_handler(const char *method,
  * (an image is tens of MB against a 1 MiB body) and with the same contract:
  * the length in /images is what a client loops against. */
 
+#if !defined(PM_METAL_FIRMWARE) && !defined(PM_METAL_BROWSER)
 /* Names worth offering. A whitelist, not "every file in the build dir":
  * that tree also holds thousands of .o files and generated C. */
 static int img_is_image(const char *name) {
@@ -2905,7 +2906,6 @@ static int img_is_image(const char *name) {
     return 0;
 }
 
-#if !defined(PM_METAL_FIRMWARE) && !defined(PM_METAL_BROWSER)
 /* <metal>/port/build, from the same root ib_fill resolved. */
 static const char *img_build_root(void) {
     static char root[2600];

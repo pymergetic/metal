@@ -388,11 +388,6 @@ static int pm_metal_jit_c_tcc_native_compile(const char *source, pm_metal_jit_c_
 static int pm_metal_jit_c_tcc_native_compile(const char *source, pm_metal_jit_c_result_t *r) {
     (void)source; (void)r; return -1;
 }
-static int pm_metal_jit_c_tcc_wasm_compile(const char *source,
-    uint8_t *wasm_out, size_t wasm_cap, size_t *wasm_len) {
-    (void)source; (void)wasm_out; (void)wasm_cap; (void)wasm_len;
-    return -1;
-}
 int32_t pm_metal_jit_c_arena_acquire(pm_util_mem_arena_t *arena) {
     (void)arena;
     return -1;  /* no TCC on this seat: nothing to install */

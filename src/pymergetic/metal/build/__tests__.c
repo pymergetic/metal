@@ -254,12 +254,14 @@ static int32_t test_graph_cycle(void) {
  * (which crosses the object boundary into the callee) is asserted.
  * This is the cross-object symbol-resolution proof.
  */
+#if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
 static const char *S_CALLEE =
     "int add_two(int a, int b) { return a + b; }\n";
 
 static const char *S_CALLER =
     "int add_two(int a, int b);\n"
     "int call_add(void) { return add_two(19, 23); }\n";
+#endif
 
 static int32_t test_multi_object_link(void) {
 #if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
@@ -2021,6 +2023,7 @@ static int32_t test_two_build_isolation(void) {
  *   test.dag.grandchild                — depends on victim: SKIPPED too
  * Expected: 2 DONE, 1 FAILED, 2 SKIPPED — the failure never cascades into
  * misleading compile errors and never blocks the independent subtree. */
+#if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)
 static char s_dag_src_root[2048];
 
 static int32_t dag_root_fn(const char *fqn, char *buf, size_t cap) {
@@ -2039,6 +2042,7 @@ static int32_t dag_root_fn(const char *fqn, char *buf, size_t cap) {
     }
     return 0;
 }
+#endif
 
 static int32_t test_dag_run(void) {
 #if defined(PM_METAL_BUILD_HAS_ELF) && PM_HAS_TCC && !defined(TCC_TARGET_WASM32)

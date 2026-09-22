@@ -46,6 +46,32 @@ def ident(rel: str) -> str:
     return "www_" + (s if s else "root")
 
 
+def bundle_site_css(root: pathlib.Path) -> bytes:
+    """Inline site.css imports into one response for constrained seats.
+
+    Firmware serves a small concurrent socket table. Letting the browser fan
+    out nine imported stylesheets can starve the page's live API requests and
+    can leave a partially themed document. The imports are local, ordered, and
+    contain no nested imports or url() assets, so one build-time concatenation
+    preserves CSS order while making the page one atomic stylesheet fetch.
+    """
+    entry = (root / "static" / "site.css").read_text(encoding="utf-8")
+    out: list[str] = []
+    import_re = re.compile(r'^@import url\("([^"]+)"\);(?:\s*/\*.*\*/)?\s*$')
+    for line in entry.splitlines():
+        match = import_re.match(line)
+        if match is None:
+            out.append(line)
+            continue
+        imported = root / "static" / match.group(1)
+        data = imported.read_text(encoding="utf-8")
+        if "@import" in data or "url(" in data:
+            raise ValueError(f"site CSS dependency must be self-contained: {imported}")
+        out.append(f"/* {match.group(1)} */")
+        out.append(data.rstrip())
+    return ("\n".join(out) + "\n").encode("utf-8")
+
+
 def emit_array(out, name: str, data: bytes) -> None:
     out.write(f"static const uint8_t s_{name}[] = {{\n")
     if not data:
@@ -100,7 +126,7 @@ def main() -> int:
         rel = path.relative_to(root).as_posix()
         url = "/" + rel
         data_name = ident(rel)
-        data = path.read_bytes()
+        data = bundle_site_css(root) if rel == "static/site.css" else path.read_bytes()
         emit_array(buf, data_name, data)
         mounts.append((url, data_name, len(data)))
 
