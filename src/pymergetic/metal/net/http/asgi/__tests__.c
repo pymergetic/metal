@@ -825,6 +825,61 @@ static int32_t case_conn_knob(void) {
     return 0;
 }
 
+/* A connection that never speaks must give its row back. A browser's
+ * speculative keep-alive opens sockets it may never write to, and a peer can
+ * vanish without FIN or RST; either way the row is reaped on the idle budget
+ * (CONN_IDLE_MAX_WAITS slices of CONN_STALL_SLICE_US in the card) instead of
+ * waiting for a client that forgot us. */
+static int32_t case_idle_reap(void) {
+    enum { IDLE_PORT = KNOB_PORT + 30 };
+    int32_t slot = pm_util_limits_find("pymergetic.metal.net.http.asgi.connection");
+    int32_t srv;
+    int32_t c;
+    int spin;
+    int saw_held = 0;
+    if (slot < 0) {
+        return fail("the connection knob is not on this seat");
+    }
+    if (pm_util_limits_used(slot) != 0u) {
+        return fail("a connection was still held before the idle case");
+    }
+    srv = pm_metal_net_http_asgi_listen(LO4, IDLE_PORT);
+    if (srv < 0) {
+        return fail("the idle server did not start");
+    }
+    c = pm_metal_net_ip_out_socket(PM_METAL_NET_IP_SOCK_STREAM);
+    if (c < 0 || pm_metal_net_ip_connect(c, LO4, IDLE_PORT) < 0) {
+        return fail("idle client connect");
+    }
+    /* The accept lands and holds a row; the client then says nothing at all.
+     * The reap is five seconds of real time, so the runner is spun well past
+     * it — the loop ends early the moment the row comes back. */
+    for (spin = 0; spin < 40000; spin++) {
+        pm_metal_net_ip_pump();
+        pm_metal_coop_poll();
+        if (pm_util_limits_used(slot) != 0u) {
+            saw_held = 1;
+        } else if (saw_held) {
+            break;
+        }
+    }
+    (void)pm_metal_net_ip_close(c);
+    for (spin = 0; spin < 3000; spin++) {
+        pm_metal_net_ip_pump();
+        pm_metal_coop_poll();
+    }
+    if (pm_metal_net_http_asgi_stop(srv) != 0) {
+        return fail("stop the idle server");
+    }
+    if (!saw_held) {
+        return fail("the quiet connection never took a row");
+    }
+    if (pm_util_limits_used(slot) != 0u) {
+        return fail("a quiet connection kept its row past the idle budget");
+    }
+    return 0;
+}
+
 int32_t pm_metal_net_http_asgi_tests(void) {
     if (case_fetch_default() != 0) {
         return 1;
@@ -860,6 +915,9 @@ int32_t pm_metal_net_http_asgi_tests(void) {
         return 1;
     }
     if (case_conn_knob() != 0) {
+        return 1;
+    }
+    if (case_idle_reap() != 0) {
         return 1;
     }
     return 0;

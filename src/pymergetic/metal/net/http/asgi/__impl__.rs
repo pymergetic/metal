@@ -216,6 +216,8 @@ struct Conn {
     /* Deferred-body bookkeeping: polls spent parked, and the renderer's verdict. */
     defer_waits: u32,
     defer_ready: bool,
+    /* Slices spent without a byte moving either way; reaped past budget. */
+    stall_waits: u32,
 }
 
 struct Mut<T>(UnsafeCell<T>);
@@ -409,6 +411,17 @@ const MAX_DEFER_DEFAULT: u32 = 16;
  * server down). */
 const DEFER_SLICE_US: u64 = 1_000;
 const DEFER_MAX_WAITS: u32 = 5_000;
+/* Stall budget for one live connection, in the same wake-and-recheck shape as
+ * the defer queue above. An accepted socket whose client never speaks (a
+ * browser's speculative keep-alive) or a transfer that stops making progress
+ * must not pin its row forever: the table is small and every row is shared.
+ * Slices are coarse so a full table of quiet sockets costs a few wakeups a
+ * second, not one per millisecond. */
+const CONN_STALL_SLICE_US: u64 = 250_000;
+/* No request bytes at all: a client that meant to speak has spoken by now. */
+const CONN_IDLE_MAX_WAITS: u32 = 20; // 5 s
+/* Mid-request or mid-response: a slow link gets an hourglass, not forever. */
+const CONN_STALL_MAX_WAITS: u32 = 240; // 60 s
 /* Request path, query included, as handed to a handler or a deferred
  * renderer. A registered route's own path stays short (`Route.path`), but a
  * request carries arguments: an object window's `?off=`, and the console's
@@ -966,6 +979,38 @@ unsafe fn release_conn(c: &mut Conn) {
     }
 }
 
+/// One quiet slice for a connection: reap it past budget, otherwise wake
+/// later and re-check. This replaces bare WAITING parks — a socket parked
+/// with no timer has no wake source once its peer goes quiet, and the row it
+/// holds stays taken until the peer remembers to close. Returns the step's
+/// verdict: WAITING to keep going, ERROR after the teardown.
+unsafe fn conn_stall(
+    self_: *mut pm_metal_coop_coro_t,
+    c: &mut Conn,
+    slot: usize,
+    budget: u32,
+) -> i32 {
+    c.stall_waits += 1;
+    if c.stall_waits > budget {
+        unsafe {
+            release_conn(c);
+            conn_drop(slot);
+        }
+        return ERROR;
+    }
+    let rc = unsafe { pm_metal_coop_sleep_us(self_, CONN_STALL_SLICE_US) };
+    if rc != WAITING {
+        /* Sleep failed: no timer means no wake, so the row would leak with
+         * the task. Give the slot back instead. */
+        unsafe {
+            release_conn(c);
+            conn_drop(slot);
+        }
+        return ERROR;
+    }
+    rc
+}
+
 
 /// Queue a parked connection's path for the renderer. False when the queue is
 /// full, in which case the caller must answer instead of parking.
@@ -1379,7 +1424,15 @@ struct ConnFrame {
         }
         let n = unsafe { pm_metal_net_ip_recv(c.fd, c.rx.as_mut_ptr().add(c.rx_len as usize), room) };
         if n == 0 {
-            return WAITING;
+            /* Quiet slice: no request yet gets the short budget (a browser's
+             * speculative keep-alive speaks or dies), a half-received one the
+             * long one. */
+            let budget = if c.rx_len == 0 {
+                CONN_IDLE_MAX_WAITS
+            } else {
+                CONN_STALL_MAX_WAITS
+            };
+            return conn_stall(self_, c, slot, budget);
         }
         if n < 0 {
             unsafe {
@@ -1388,10 +1441,11 @@ struct ConnFrame {
             }
             return ERROR;
         }
+        c.stall_waits = 0;
         c.rx_len += n as u32;
         let end = match find_headers_end(&c.rx, c.rx_len as usize) {
             Some(e) => e,
-            None => return WAITING,
+            None => return conn_stall(self_, c, slot, CONN_STALL_MAX_WAITS),
         };
         let mut m_off = 0usize;
         let mut m_len2 = 0usize;
@@ -1607,6 +1661,7 @@ fn spawn_conn(fd: i32) -> i32 {
             stream_chunk_len: 0,
             defer_waits: 0,
             defer_ready: false,
+            stall_waits: 0,
         };
         let coro = pm_metal_coop_coro_create(step_conn_frame, core::mem::size_of::<ConnFrame>());
         if coro.is_null() {
