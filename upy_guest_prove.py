@@ -134,6 +134,54 @@ if _a is None or _a[0] != 0 or _a[1] != 0x7F000002:
     raise SystemExit("dns resolve added %r" % (_a,))
 print("upy dns")
 print("upy socket")
+
+# pymergetic.metal.ai hub + its four subcards (config/provider/session/mcp):
+# boot-wired on every seat, so the registry faces below are live here exactly
+# as everywhere else. The fn-pointer and struct faces (tool_register, chat,
+# provider.send) are C/RS CONNECT-only by design and take their coverage from
+# the card's host C cases; this scalar/string subset is the Python face and
+# must behave the same on every seat.
+import pymergetic.metal.ai as ai
+import pymergetic.metal.ai.config as ai_config
+import pymergetic.metal.ai.provider as ai_provider
+import pymergetic.metal.ai.session as ai_session
+import pymergetic.metal.ai.mcp as ai_mcp
+
+if ai.tool_count is None:
+    raise SystemExit("ai faces")
+if ai.tool_count() != 0:
+    raise SystemExit("ai tools empty")
+if ai.tool_unregister("seat-probe-missing") != -1:
+    raise SystemExit("ai tool unregister miss")
+if ai_config.param_set("seat-ai-probe", "1") != 0:
+    raise SystemExit("ai config param set")
+if ai_config.param_count() != 1:
+    raise SystemExit("ai config param count")
+if ai_config.param_delete("seat-ai-probe") != 0:
+    raise SystemExit("ai config param delete")
+if ai_config.param_count() != 0:
+    raise SystemExit("ai config param empty")
+if ai_config.provider_delete("seat-probe-missing") != -1:
+    raise SystemExit("ai config provider miss")
+if ai_provider.count() != 0:
+    raise SystemExit("ai providers empty")
+if ai_provider.remove("seat-probe-missing") != -1:
+    raise SystemExit("ai provider remove miss")
+_sid = ai_session.create("seat-ai-probe")
+if _sid[0] != 0 or ai_session.count() != 1:
+    raise SystemExit("ai session create")
+if ai_session.close(_sid[1]) != 0 or ai_session.count() != 0:
+    raise SystemExit("ai session close")
+if ai_mcp.server_count() != 0:
+    raise SystemExit("ai mcp servers empty")
+if ai_mcp.server_status("seat-probe-missing") != -1:
+    raise SystemExit("ai mcp status miss")
+if ai_mcp.server_stop("seat-probe-missing") != -1:
+    raise SystemExit("ai mcp stop miss")
+if ai_mcp.discover_all() != 0:
+    raise SystemExit("ai mcp discover")
+print("upy ai")
+
 import pymergetic.wasmmod as w
 
 mods = w.modules()

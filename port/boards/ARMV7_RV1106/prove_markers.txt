@@ -7,4 +7,5 @@ upy types row knobs
 upy driver nic knobs
 upy device class knobs
 upy loader image knob
+upy ai
 upy console ring prove

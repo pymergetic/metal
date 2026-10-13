@@ -202,3 +202,10 @@ PM_MOD_EXPORT_C(pymergetic.metal.ai, pm_metal_ai_tool_count,
     pm_metal_ai_tool_count, uint32_t(void));
 PM_MOD_EXPORT_C(pymergetic.metal.ai, pm_metal_ai_tool_nth,
     pm_metal_ai_tool_nth, int32_t(uint32_t, pm_metal_ai_tool_t *));
+
+/* Boot-wired on every seat: the hub's init is the aggregate face (it drives
+ * provider/session/config/mcp with the system arena), so one boot record
+ * lights the whole family. Without it the arena-backed faces are dark on
+ * every seat — session rows and tool table growth refuse for want of an
+ * arena and the Python faces have no fill to prove. */
+PM_MOD_BOOT_C(pymergetic.metal.ai, pm_metal_ai_init, pm_metal_ai_deinit);

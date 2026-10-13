@@ -606,6 +606,7 @@ upy:
 	grep -q "upy build py unit_compile" $(CURDIR)/build/upy_guest_prove.log
 	grep -q "upy build events ring" $(CURDIR)/build/upy_guest_prove.log
 	grep -q "upy build all walk" $(CURDIR)/build/upy_guest_prove.log
+	grep -q "upy ai" $(CURDIR)/build/upy_guest_prove.log
 # Auto-kill any stale micropython process holding serve ports (8090/2222)
 # so the upy serve prove begins with clean sockets.
 	fuser -k 8090/tcp 40993/tcp 2>/dev/null || true
@@ -661,6 +662,7 @@ browser: browser-toolchain-check external-manifest-check
 	grep -q "upy src" $(CURDIR)/build/browser_prove.log
 	grep -q "upy dns" $(CURDIR)/build/browser_prove.log
 	grep -q "upy socket" $(CURDIR)/build/browser_prove.log
+	grep -q "upy ai" $(CURDIR)/build/browser_prove.log
 	grep -q "upy display present" $(CURDIR)/build/browser_prove.log
 	grep -q "upy input feed" $(CURDIR)/build/browser_prove.log
 	grep -q "upy console ids" $(CURDIR)/build/browser_prove.log

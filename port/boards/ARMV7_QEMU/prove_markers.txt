@@ -19,6 +19,7 @@ upy build refuse keeps ring empty
 upy editor
 upy dns
 upy socket
+upy ai
 upy swarm
 upy cdn
 upy pack import
