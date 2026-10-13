@@ -40,6 +40,13 @@
 #define PM_METAL_IP_REXMIT_DEFAULT 8192u
 #define PM_METAL_IP_RTO_US 50000ull
 #define PM_METAL_IP_REXMIT_TRIES 40u
+/* A send parked on the peer's full window has no unacked bytes, so the
+ * retransmit clock never bounds it. A peer that stops reading (or closes its
+ * half and leaves the window shut) would park the sending coroutine forever
+ * and its socket row would never close. Budget that wait like the retransmit
+ * path budgets its own; any ACK that advances snd_una refreshes it, so a slow
+ * but draining reader is never killed. */
+#define PM_METAL_IP_WND_STALL_US 30000000ull
 #define PM_METAL_IP_L2_DEFAULT 32u
 #define PM_METAL_IP_RT_DEFAULT 16u
 #define PM_METAL_IP_MASK24 0xffffff00u
@@ -111,6 +118,10 @@ struct pm_metal_sock {
     uint8_t rexmit_tries;
     uint32_t rexmit_end;
     uint64_t rexmit_at;
+    /* Deadline for a coroutine parked on a full send window (0 = not parked).
+     * Refreshed whenever an ACK advances snd_una; checked by the TCP timeout
+     * pass so a stalled peer cannot leak the row. */
+    uint64_t wnd_stall_at;
     uint32_t app_closed;
     uint32_t fin_sent;
     uint32_t tcp_error;

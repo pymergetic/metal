@@ -94,6 +94,18 @@ int32_t pm_ip_tcp_xmit(struct pm_metal_sock *s, uint8_t flags, const uint8_t *da
     }
     tx = tcp_emit(s, flags, data, dlen, seq);
     if (tx != PM_METAL_NET_TX_OK) {
+        if (tx == PM_METAL_NET_TX_WAIT && (flags & TCP_SYN) != 0u && dlen == 0u
+            && old_rexmit_len == 0u) {
+            /* The 16-deep device TX ring was full (a page-load burst queues
+             * more handshakes than the ring holds). Keep the SYN registered
+             * and its sequence claimed: the retransmit clock re-sends it every
+             * RTO until it lands or the retry budget releases the half-open
+             * row. Rolling the registration back here dropped the SYN-ACK
+             * with no retry, and the peer's SYN retransmits were then answered
+             * with nothing — connections timed out and the orphaned rows
+             * piled up until nothing new could connect. */
+            return tx;
+        }
         s->snd_nxt = seq;
         s->rexmit_len = old_rexmit_len;
         s->rexmit_end = old_rexmit_len != 0u ? s->rexmit_seq + old_rexmit_len : 0u;
@@ -109,6 +121,10 @@ int32_t pm_ip_tcp_close(struct pm_metal_sock *s) {
     if (s == NULL || s->kind != SK_TCP) {
         return -1;
     }
+    /* The owner is done with this socket, so any park registration left on it
+     * is stale by definition: this row now lives on only for the FIN dance,
+     * and a late ACK must not post the (possibly already completed) waiter. */
+    s->waiter = NULL;
     s->app_closed = 1u;
     if (s->tcp_error) {
         pm_ip_sock_drop(s->self_fd);
@@ -164,6 +180,20 @@ void pm_ip_tcp_check_timeouts(void) {
             continue;
         }
         if (s->rexmit_len == 0u || now < s->rexmit_at) {
+            /* Nothing unacked leaves the retransmit clock idle — but a
+             * coroutine parked on a full send window lives exactly there
+             * (everything it sent was ACKed; the peer then stopped opening
+             * the window). Bound that wait too, or a stalled/aborted peer
+             * leaks the socket row until the whole table is wedged. */
+            if (s->rexmit_len == 0u && s->waiter != NULL
+                && (s->snd_nxt - s->snd_una) >= s->snd_wnd) {
+                if (s->peer_fin
+                    || (s->wnd_stall_at != 0u && now >= s->wnd_stall_at)) {
+                    s->tcp_error = 1u;
+                    s->wnd_stall_at = 0u;
+                    pm_ip_sock_wake(s);
+                }
+            }
             continue;
         }
         {
@@ -183,6 +213,13 @@ void pm_ip_tcp_check_timeouts(void) {
              * dropping that row here permits fd reuse before its coroutine wakes
              * (fd ABA). */
             if (s->app_closed) {
+                pm_ip_sock_drop(s->self_fd);
+                continue;
+            }
+            if (s->tcp_st == TCP_SYN_RCVD) {
+                /* The handshake never completed: no accept() owns this row,
+                 * so erroring it keeps a slot nothing can ever release. The
+                 * peer abandoned the attempt — free the row. */
                 pm_ip_sock_drop(s->self_fd);
                 continue;
             }
@@ -263,6 +300,13 @@ void pm_ip_tcp_input(uint32_t src, uint32_t dst, const uint8_t *th, uint32_t thl
      * the end of the stream once what already arrived is drained, senders an
      * error — and wake whoever was waiting. */
     if ((flags & TCP_RST) != 0 && s->tcp_st != TCP_LISTEN) {
+        if (s->tcp_st == TCP_SYN_RCVD) {
+            /* The handshake never completed, so no accept() owns this row and
+             * no application will ever release it. Drop it now — a speculative
+             * connection the peer abandoned must not leak its slot. */
+            pm_ip_sock_drop(s->self_fd);
+            return;
+        }
         s->peer_fin = 1;
         s->tcp_st = TCP_CLOSE_WAIT;
         pm_ip_sock_wake(s);
@@ -287,6 +331,9 @@ void pm_ip_tcp_input(uint32_t src, uint32_t dst, const uint8_t *th, uint32_t thl
             s->rexmit_tries = 0;
             s->rexmit_at = pm_metal_coop_mono_us() + PM_METAL_IP_RTO_US;
         }
+        /* The peer drained data (snd_una advanced), so a window-parked sender
+         * is making progress — refresh its stall budget. */
+        s->wnd_stall_at = 0u;
         /* An ACK freed send-window space; wake any coroutine parked on a full
          * window (streaming server responses) so it can push the next chunk. */
         pm_ip_sock_wake(s);
@@ -314,6 +361,16 @@ void pm_ip_tcp_input(uint32_t src, uint32_t dst, const uint8_t *th, uint32_t thl
         } else if (w < s->snd_wnd) {
             s->snd_wnd = w;
         }
+    }
+    if (s->tcp_st == TCP_SYN_RCVD && (flags & TCP_SYN) != 0 && (flags & TCP_ACK) == 0) {
+        /* The peer is retrying its SYN: our SYN-ACK never reached it. Answer
+         * the retry now from the registered segment — ignoring it left the
+         * peer timing out on a handshake that was half-open on both sides. */
+        if (s->rexmit_len != 0u) {
+            uint32_t ctl = ((s->rexmit_flags & (TCP_SYN | TCP_FIN)) != 0u) ? 1u : 0u;
+            (void)tcp_emit(s, s->rexmit_flags, s->rexmit, s->rexmit_len - ctl, s->rexmit_seq);
+        }
+        return;
     }
     if (s->tcp_st == TCP_LISTEN && (flags & TCP_SYN) != 0 && (flags & TCP_ACK) == 0) {
         int32_t cfd = pm_ip_sock_alloc(SK_TCP);

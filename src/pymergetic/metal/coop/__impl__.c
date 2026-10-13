@@ -1124,6 +1124,14 @@ uint32_t pm_metal_coop_n_runners(void) {
     return s_ready ? s_ncpu : 0u;
 }
 
+/* Which runner core is calling. Slots are cpu_slot() values: APIC id on
+ * firmware SMP, the thread's marked slot on pthread seats, 0 on one-core
+ * seats. Callers that keep per-runner state (the ip card's pump nest) index
+ * by this so two runner cores never share the slot. */
+uint32_t pm_metal_coop_runner_slot(void) {
+    return cpu_slot();
+}
+
 const char *pm_metal_coop_runner_kind(void) {
 #if defined(PM_METAL_COOP_PTHREAD)
     return "pthread";
@@ -1444,5 +1452,6 @@ PM_MOD_EXPORT_C(pymergetic.metal.coop, pm_metal_coop_process_id, pm_metal_coop_p
 PM_MOD_EXPORT_C(pymergetic.metal.coop, pm_metal_coop_post_task, pm_metal_coop_post_task, int32_t(pm_metal_coop_task_t *));
 PM_MOD_EXPORT_C(pymergetic.metal.coop, pm_metal_coop_ready, pm_metal_coop_ready, int32_t(void));
 PM_MOD_EXPORT_C(pymergetic.metal.coop, pm_metal_coop_n_runners, pm_metal_coop_n_runners, uint32_t(void));
+PM_MOD_EXPORT_C(pymergetic.metal.coop, pm_metal_coop_runner_slot, pm_metal_coop_runner_slot, uint32_t(void));
 
 PM_MOD_BOOT_C(pymergetic.metal.coop, pm_metal_coop_boot, pm_metal_coop_deinit);

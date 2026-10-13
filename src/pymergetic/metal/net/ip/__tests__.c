@@ -260,6 +260,10 @@ static struct {
     uint32_t bad_csum;
     uint32_t bad_dmac;
     uint32_t frame_max;
+    /* While set, the wire is congested: tx reports a full ring (TX_WAIT)
+     * instead of taking the frame — what the 16-deep device ring does under a
+     * page-load burst. */
+    uint32_t fail_tx;
     pm_metal_netdev_ops_t ops;
 } peer;
 
@@ -376,6 +380,10 @@ static int32_t peer_tx(void *ctx, const uint8_t *frame, uint16_t len) {
     (void)ctx;
     if (frame == NULL || len < 14u) {
         return -1;
+    }
+    if (peer.fail_tx != 0u) {
+        /* Congested wire: the ring is full, the frame is not taken. */
+        return PM_METAL_NET_TX_WAIT;
     }
     et = rd16(frame + 12);
     if (et == 0x0806u && len >= 42u && rd16(frame + 20) == 1u) {
@@ -659,6 +667,288 @@ static int32_t case_tcp_reliable_close(void) {
     s->rexmit_at = 0u;
     pm_ip_tcp_check_timeouts();
     if (pm_ip_sock_at(fd) != NULL) return fail("closed timeout retained");
+    return 0;
+}
+
+static int32_t case_abandoned_handshake(void) {
+    /* A peer that starts a handshake and walks away — Chrome opens
+     * speculative connections and abandons them mid-handshake all the time —
+     * leaves a SYN_RCVD row that no accept() will ever be handed. Such a row
+     * has no owner to release it: keeping it (even "errored") leaks the slot
+     * until the whole socket table is full and every new SYN is dropped. */
+    int32_t fd;
+    struct pm_metal_sock *s;
+    uint8_t th[20];
+
+    /* (1) The SYN-ACK retry budget expires with no peer. */
+    fd = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
+    if (fd < 0) return fail("abandoned socket");
+    s = pm_ip_sock_at(fd);
+    if (s == NULL) return fail("abandoned row");
+    s->bound = 1; s->laddr_be = OUR_IP; s->lport = 7207;
+    s->raddr_be = PEER_IP; s->rport = 50000u; s->l2_h = peer.h;
+    s->tcp_st = TCP_SYN_RCVD;
+    s->rcv_nxt = 9000u; s->snd_una = 1000u; s->snd_nxt = 1001u;
+    s->rexmit_seq = 1000u; s->rexmit_len = 1u; s->rexmit_end = 1001u;
+    s->rexmit_flags = TCP_SYN; s->rexmit_tries = PM_METAL_IP_REXMIT_TRIES - 1u;
+    s->rexmit_at = 0u;
+    pm_ip_tcp_check_timeouts();
+    if (pm_ip_sock_at(fd) != NULL) {
+        return fail("abandoned handshake survived its SYN-ACK budget");
+    }
+
+    /* (2) Or the peer resets the attempt outright. */
+    fd = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
+    if (fd < 0) return fail("abandoned reset socket");
+    s = pm_ip_sock_at(fd);
+    if (s == NULL) return fail("abandoned reset row");
+    s->bound = 1; s->laddr_be = OUR_IP; s->lport = 7208;
+    s->raddr_be = PEER_IP; s->rport = 50001u; s->l2_h = peer.h;
+    s->tcp_st = TCP_SYN_RCVD;
+    s->rcv_nxt = 9000u; s->snd_una = 1000u; s->snd_nxt = 1001u;
+    s->rexmit_seq = 1000u; s->rexmit_len = 1u; s->rexmit_end = 1001u;
+    s->rexmit_flags = TCP_SYN; s->rexmit_tries = 0u; s->rexmit_at = 0u;
+    memset(th, 0, sizeof(th));
+    pm_ip_write_be16(th, 50001u);
+    pm_ip_write_be16(th + 2, 7208u);
+    pm_ip_write_be32(th + 4, 9000u);
+    th[12] = 0x50; th[13] = TCP_RST;
+    pm_ip_tcp_input(PEER_IP, OUR_IP, th, sizeof(th));
+    if (pm_ip_sock_at(fd) != NULL) {
+        return fail("abandoned handshake survived its peer reset");
+    }
+    return 0;
+}
+
+typedef struct {
+    pm_metal_coop_coro_t coro;
+    int32_t fd;
+    int32_t n;
+} tcp_stall_frame_t;
+
+static pm_metal_coop_status_t step_tcp_stall(pm_metal_coop_coro_t *self) {
+    tcp_stall_frame_t *f = (tcp_stall_frame_t *)self;
+    const uint8_t msg[] = { 'x' };
+    f->n = pm_metal_net_ip_send(f->fd, msg, sizeof(msg));
+    return f->n == 0 ? PM_METAL_COOP_WAITING : PM_METAL_COOP_DONE;
+}
+
+static pm_metal_coop_status_t step_tcp_park_rx(pm_metal_coop_coro_t *self) {
+    tcp_stall_frame_t *f = (tcp_stall_frame_t *)self;
+    uint8_t buf[4];
+    f->n = pm_metal_net_ip_recv(f->fd, buf, sizeof(buf));
+    return f->n == 0 ? PM_METAL_COOP_WAITING : PM_METAL_COOP_DONE;
+}
+
+static int32_t case_synack_tx_wait_retry(void) {
+    /* The device TX ring is 16 frames deep; a page-load burst queues more
+     * handshakes than that in one pump pass. A SYN-ACK the ring refuses must
+     * stay registered for the retransmit clock — rolling the registration
+     * back dropped it with no retry, the peer's SYN retransmits were answered
+     * with nothing, connections timed out and the half-open rows piled up. */
+    int32_t fd = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
+    struct pm_metal_sock *s;
+    uint8_t th[20];
+    uint32_t seen;
+    if (fd < 0) return fail("txw socket");
+    s = pm_ip_sock_at(fd);
+    if (s == NULL) return fail("txw row");
+    s->bound = 1; s->laddr_be = OUR_IP; s->lport = 7213;
+    s->raddr_be = PEER_IP; s->rport = 50006u; s->l2_h = peer.h;
+    s->tcp_st = TCP_SYN_RCVD;
+    s->rcv_nxt = 9000u; s->snd_una = 1000u; s->snd_nxt = 1000u;
+
+    /* (1) A congested ring refuses the SYN-ACK; the sequence claim and the
+     * retransmit registration survive so the clock re-sends it. */
+    peer.fail_tx = 1u;
+    if (pm_ip_tcp_xmit(s, (uint8_t)(TCP_SYN | TCP_ACK), NULL, 0) != PM_METAL_NET_TX_WAIT) {
+        return fail("txw not congested");
+    }
+    if (s->rexmit_len != 1u || s->rexmit_seq != 1000u || s->snd_nxt != 1001u) {
+        return fail("txw SYN-ACK registration lost to congestion");
+    }
+    peer.fail_tx = 0u;
+    seen = peer.ip_seen;
+    s->rexmit_at = 0u;
+    pm_ip_tcp_check_timeouts();
+    if (peer.ip_seen != seen + 1u) {
+        return fail("txw SYN-ACK not retried");
+    }
+    if ((peer.last[14u + 20u + 13u] & (TCP_SYN | TCP_ACK)) != (TCP_SYN | TCP_ACK)) {
+        return fail("txw retry is not a SYN-ACK");
+    }
+    /* The completing ACK trims the registration and lands the connection. */
+    memset(th, 0, sizeof(th));
+    pm_ip_write_be16(th, 50006u);
+    pm_ip_write_be16(th + 2, 7213u);
+    pm_ip_write_be32(th + 4, 9000u);
+    pm_ip_write_be32(th + 8, 1001u);
+    th[12] = 0x50; th[13] = TCP_ACK;
+    pm_ip_write_be16(th + 14, 8192u);
+    pm_ip_tcp_input(PEER_IP, OUR_IP, th, sizeof(th));
+    if (s->tcp_st != TCP_ESTAB || s->rexmit_len != 0u) {
+        return fail("txw completion");
+    }
+    if (pm_metal_net_ip_close(fd) != 0 || pm_ip_sock_at(fd) == NULL) {
+        return fail("txw close");
+    }
+    pm_ip_write_be32(th + 8, 1002u); /* the FIN's ACK completes the close */
+    pm_ip_tcp_input(PEER_IP, OUR_IP, th, sizeof(th));
+    if (pm_ip_sock_at(fd) != NULL) {
+        return fail("txw close leak");
+    }
+
+    /* (2) A peer's SYN retransmission gets an immediate SYN-ACK from the
+     * registered segment instead of silence. */
+    fd = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
+    if (fd < 0) return fail("txw2 socket");
+    s = pm_ip_sock_at(fd);
+    if (s == NULL) return fail("txw2 row");
+    s->bound = 1; s->laddr_be = OUR_IP; s->lport = 7214;
+    s->raddr_be = PEER_IP; s->rport = 50007u; s->l2_h = peer.h;
+    s->tcp_st = TCP_SYN_RCVD;
+    s->rcv_nxt = 9000u; s->snd_una = 1000u; s->snd_nxt = 1000u;
+    peer.fail_tx = 1u;
+    (void)pm_ip_tcp_xmit(s, (uint8_t)(TCP_SYN | TCP_ACK), NULL, 0);
+    peer.fail_tx = 0u;
+    seen = peer.ip_seen;
+    memset(th, 0, sizeof(th));
+    pm_ip_write_be16(th, 50007u);
+    pm_ip_write_be16(th + 2, 7214u);
+    pm_ip_write_be32(th + 4, 8999u);
+    th[12] = 0x50; th[13] = TCP_SYN;
+    pm_ip_tcp_input(PEER_IP, OUR_IP, th, sizeof(th));
+    if (peer.ip_seen != seen + 1u) {
+        return fail("txw SYN retry unanswered");
+    }
+    if ((peer.last[14u + 20u + 13u] & (TCP_SYN | TCP_ACK)) != (TCP_SYN | TCP_ACK)) {
+        return fail("txw SYN retry answer is not a SYN-ACK");
+    }
+    (void)pm_metal_net_ip_close(fd);
+    return 0;
+}
+
+static int32_t case_stale_park_consumed(void) {
+    /* The scheduler re-runs tick-rewired tasks without the socket ever waking
+     * them, so a task can step past its park and on to completion while the
+     * socket still points at it. A late ACK would then post a freed task and
+     * the scheduler would jump through freed memory. The registration must be
+     * consumed whenever its task runs again — and cleared at close. */
+    int32_t fd = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
+    struct pm_metal_sock *s;
+    if (fd < 0) return fail("stale socket");
+    s = pm_ip_sock_at(fd);
+    if (s == NULL) return fail("stale row");
+    s->bound = 1; s->laddr_be = OUR_IP; s->lport = 7211;
+    s->raddr_be = PEER_IP; s->rport = 50004u; s->l2_h = peer.h;
+    s->tcp_st = TCP_ESTAB;
+    s->rcv_nxt = 9000u; s->snd_una = 5000u; s->snd_nxt = 5000u;
+    s->snd_wnd = 8192u;
+    tcp_stall_frame_t *f =
+        (tcp_stall_frame_t *)pm_metal_coop_coro_create(step_tcp_park_rx, sizeof(*f));
+    if (f == NULL) return fail("stale coro");
+    f->fd = fd;
+    f->n = 0;
+    pm_metal_coop_task_t *t = pm_metal_coop_create_task(&f->coro);
+    if (t == NULL) return fail("stale task");
+    uint32_t settle = 0;
+    while (f->coro.status == PM_METAL_COOP_PENDING && settle < 100000u) {
+        pm_metal_coop_poll();
+        settle++;
+    }
+    if (f->coro.status != PM_METAL_COOP_WAITING) return fail("stale not parked");
+    s = pm_ip_sock_at(fd);
+    if (s == NULL || s->waiter == NULL) return fail("stale park not registered");
+    /* Re-run the task the way the tick timer does: queued again without the
+     * socket waking it, so the registration above would go stale the moment
+     * this run ends. Error the socket first so the run exits into failure. */
+    s->tcp_error = 1u;
+    (void)pm_metal_coop_post_task(t);
+    if (pm_metal_coop_run(t) != 0 || f->coro.status != PM_METAL_COOP_DONE) {
+        return fail("stale run");
+    }
+    if (f->n >= 0) return fail("stale recv did not fail");
+    s = pm_ip_sock_at(fd);
+    if (s == NULL) return fail("stale row gone");
+    if (s->waiter != NULL) return fail("stale park survived its task");
+    (void)pm_metal_net_ip_close(fd);
+
+    /* Close drops any registration too: the row lives on for the FIN dance
+     * and must not carry a waiter into it. */
+    fd = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
+    if (fd < 0) return fail("close park socket");
+    s = pm_ip_sock_at(fd);
+    if (s == NULL) return fail("close park row");
+    s->bound = 1; s->laddr_be = OUR_IP; s->lport = 7212;
+    s->raddr_be = PEER_IP; s->rport = 50005u; s->l2_h = peer.h;
+    s->tcp_st = TCP_ESTAB;
+    s->rcv_nxt = 9000u; s->snd_una = 5000u; s->snd_nxt = 5000u;
+    s->snd_wnd = 8192u;
+    s->waiter = t; /* a registration close must not carry into the FIN dance */
+    if (pm_metal_net_ip_close(fd) != 0) return fail("close park close");
+    s = pm_ip_sock_at(fd);
+    if (s != NULL && s->waiter != NULL) return fail("close kept a stale park");
+    return 0;
+}
+
+static int32_t case_window_stall_release(void) {
+    /* A sender parked on the peer's full window has nothing unacked, so the
+     * retransmit clock cannot bound it. A peer that stops reading and never
+     * speaks again must not park the coroutine (and its socket row) forever. */
+    int32_t fd = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
+    struct pm_metal_sock *s;
+    if (fd < 0) return fail("stall socket");
+    s = pm_ip_sock_at(fd);
+    if (s == NULL) return fail("stall row");
+    s->bound = 1; s->laddr_be = OUR_IP; s->lport = 7209;
+    s->raddr_be = PEER_IP; s->rport = 50002u; s->l2_h = peer.h;
+    s->tcp_st = TCP_ESTAB;
+    s->rcv_nxt = 9000u; s->snd_una = 5000u; s->snd_nxt = 5000u;
+    s->snd_wnd = 0u; /* the peer's window is shut */
+    s->peer_fin = 0u;
+    tcp_stall_frame_t *f =
+        (tcp_stall_frame_t *)pm_metal_coop_coro_create(step_tcp_stall, sizeof(*f));
+    if (f == NULL) return fail("stall coro");
+    f->fd = fd;
+    f->n = 0;
+    pm_metal_coop_task_t *t = pm_metal_coop_create_task(&f->coro);
+    if (t == NULL) return fail("stall task");
+    uint32_t settle = 0;
+    while (f->coro.status == PM_METAL_COOP_PENDING && settle < 100000u) {
+        pm_metal_coop_poll();
+        settle++;
+    }
+    if (f->coro.status != PM_METAL_COOP_WAITING) return fail("stall not parked");
+    /* The stall budget fires: the parked sender is woken with an error. */
+    s = pm_ip_sock_at(fd);
+    if (s == NULL) return fail("stall row gone");
+    s->wnd_stall_at = 1u;
+    pm_ip_tcp_check_timeouts();
+    if (pm_metal_coop_run(t) != 0 || f->coro.status != PM_METAL_COOP_DONE) {
+        return fail("stalled sender not released");
+    }
+    if (f->n >= 0) return fail("stalled send did not report failure");
+    (void)pm_metal_net_ip_close(fd);
+
+    /* A peer that closed its half with the window shut is dead to us: the
+     * next send must fail at once, not park on a window that can never open. */
+    fd = pm_metal_net_ip_socket(PM_METAL_NET_IP_SOCK_STREAM);
+    if (fd < 0) return fail("fin stall socket");
+    s = pm_ip_sock_at(fd);
+    if (s == NULL) return fail("fin stall row");
+    s->bound = 1; s->laddr_be = OUR_IP; s->lport = 7210;
+    s->raddr_be = PEER_IP; s->rport = 50003u; s->l2_h = peer.h;
+    s->tcp_st = TCP_ESTAB;
+    s->rcv_nxt = 9000u; s->snd_una = 5000u; s->snd_nxt = 5000u;
+    s->snd_wnd = 0u;
+    s->peer_fin = 1u;
+    {
+        const uint8_t msg[] = { 'y' };
+        if (pm_metal_net_ip_send(fd, msg, sizeof(msg)) >= 0) {
+            return fail("send after peer close parked instead of failing");
+        }
+    }
+    (void)pm_metal_net_ip_close(fd);
     return 0;
 }
 
@@ -1079,6 +1369,18 @@ static int32_t case_offbox(void) {
     }
     if (st == 0) {
         st = case_tcp_reliable_close();
+    }
+    if (st == 0) {
+        st = case_abandoned_handshake();
+    }
+    if (st == 0) {
+        st = case_window_stall_release();
+    }
+    if (st == 0) {
+        st = case_synack_tx_wait_retry();
+    }
+    if (st == 0) {
+        st = case_stale_park_consumed();
     }
     if (st == 0) {
         st = case_ping_offbox();

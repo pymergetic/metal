@@ -68,24 +68,38 @@ void *pm_ip_table_grow(void *base, uint32_t *cap, uint32_t item, const pm_util_l
 static uint16_t s_eph = 49152u;
 static uint16_t s_ping_seq;
 
-/* Depth of pm_metal_net_ip_pump already on this OS thread's stack (>0 means we
+/* Depth of pm_metal_net_ip_pump already on THIS RUNNER's stack (>0 means we
  * hold pm_ip_lock and are inside pm_ip_pump_locked, e.g. a net driver poll that
  * drove a cooperative waiter into a nested pump). pm_ip_lock is a non-reentrant
  * spinlock, and a cooperative yield inside the pump body re-enters it with no
  * way for the holder to give it up, so a re-entrant call runs the body inline
- * without re-acquiring. Thread-local because multiple OS threads (async runners)
- * can each be inside a pump; only the lock holder on its own thread ever reaches
- * nest>0, so skipping the lock there is race-free on every seat.
+ * without re-acquiring. Per-runner because multiple runner cores (firmware SMP
+ * APs, async runner threads) can each be inside a pump on their own stack; only
+ * the lock holder on its own runner ever reaches nest>0 on that runner's slot,
+ * so skipping the lock there is race-free on every seat. Indexed by the coop
+ * card's runner slot (cpu id on firmware SMP): one shared counter would let a
+ * second core take the "already inside" branch while another core holds the
+ * lock and run the whole data path unlocked — that race lost the socket table
+ * to a grow, walked pm_ip_sk[old cap] out of bounds into the route block, and
+ * triple-faulted the #GP we chased (10.0.2.0 as a socket pointer).
  *
  * On freestanding firmware __thread must NOT be used: clang lowers it to a
  * %fs-relative access, and the BIOS/UEFI boot never sets up a TCB (FS base = 0),
- * so the access page-faults and triple-faults into a reset loop. Firmware is a
- * single logical flow (cooperative APIC runners, no pthread), so a plain static
- * slot is equally correct — same gate the async card uses. */
+ * so the access page-faults and triple-faults into a reset loop. Firmware gets
+ * a plain slot array indexed by the coop runner core instead — same gate the
+ * async card uses. */
 #if defined(PM_METAL_FIRMWARE)
-static uint32_t s_ip_pump_nest;
+#define PM_IP_PUMP_NEST_MAX 256u /* coop runner slots clamp at PM_METAL_COOP_APIC_N */
+static uint32_t s_ip_pump_nest[PM_IP_PUMP_NEST_MAX];
+static uint32_t *pump_nest(void) {
+    uint32_t slot = pm_metal_coop_runner_slot();
+    return &s_ip_pump_nest[slot < PM_IP_PUMP_NEST_MAX ? slot : 0u];
+}
 #else
 static __thread uint32_t s_ip_pump_nest;
+static uint32_t *pump_nest(void) {
+    return &s_ip_pump_nest;
+}
 #endif
 
 /* Locked internals: defined later in this TU, but referenced by the if_up
@@ -124,6 +138,19 @@ void pm_ip_pump_locked(void);
 void pm_ip_sock_wake(struct pm_metal_sock *s) {
     if (s->waiter != NULL) {
         (void)pm_metal_coop_post_task(s->waiter);
+        s->waiter = NULL;
+    }
+}
+
+/* A park registration is only valid while the task is actually parked. The
+ * scheduler also re-runs tick-rewired tasks directly, so a task can leave its
+ * park behind and go on to complete without this socket ever waking it. If
+ * that task is running here, the registration it left is stale: consuming it
+ * is what keeps a later ACK/RST from posting a freed task, which the scheduler
+ * would then jump through into freed memory. */
+static void sock_consume_park(struct pm_metal_sock *s) {
+    pm_metal_coop_task_t *cur = pm_metal_coop_current_task();
+    if (cur != NULL && s->waiter == cur) {
         s->waiter = NULL;
     }
 }
@@ -362,19 +389,20 @@ void pm_ip_pump_locked(void) {
 }
 
 void pm_metal_net_ip_pump(void) {
-    if (s_ip_pump_nest != 0u) {
-        /* Re-entrant on this thread: we already hold pm_ip_lock (nest>0 only
+    uint32_t *nest = pump_nest();
+    if (*nest != 0u) {
+        /* Re-entrant on this runner: we already hold pm_ip_lock (nest>0 only
          * reaches here while inside pm_ip_pump_locked). Run the same body
          * inline; nobody else can be in it concurrently by the outer acquire. */
-        s_ip_pump_nest++;
+        (*nest)++;
         pm_ip_pump_locked();
-        s_ip_pump_nest--;
+        (*nest)--;
         return;
     }
     pm_util_lock_acquire(&pm_ip_lock);
-    s_ip_pump_nest = 1u;
+    *nest = 1u;
     pm_ip_pump_locked();
-    s_ip_pump_nest = 0u;
+    *nest = 0u;
     pm_util_lock_release(&pm_ip_lock);
 }
 
@@ -750,6 +778,7 @@ int32_t pm_ip_accept_locked(int32_t fd) {
     if (s == NULL || s->tcp_st != TCP_LISTEN) {
         return -1;
     }
+    sock_consume_park(s);
     if (s->accept_n == 0) {
         pm_metal_coop_task_t *cur = pm_metal_coop_current_task();
         if (cur != NULL) {
@@ -779,6 +808,7 @@ int32_t pm_ip_connect_locked(int32_t fd, uint32_t addr_be, uint16_t port_host) {
     if (s == NULL) {
         return -1;
     }
+    sock_consume_park(s);
     if (!s->bound) {
         s->laddr_be = pm_ip_src_for(s, addr_be);
         s->lport = eph_port();
@@ -825,7 +855,13 @@ int32_t pm_metal_net_ip_established(int32_t fd) {
 
 int32_t pm_ip_send_locked(int32_t fd, const uint8_t *buf, uint32_t len) {
     struct pm_metal_sock *s = sock_get(fd, SK_TCP);
-    if (s == NULL || buf == NULL || s->tcp_st != TCP_ESTAB || s->tcp_error) {
+    if (s == NULL || buf == NULL) {
+        return -1;
+    }
+    /* Consume before the error returns too: a task that leaves here to fail
+     * and complete must not leave a park registration behind. */
+    sock_consume_park(s);
+    if (s->tcp_st != TCP_ESTAB || s->tcp_error) {
         return -1;
     }
     /* Send-window flow control: never exceed the bytes the peer can buffer.
@@ -835,11 +871,21 @@ int32_t pm_ip_send_locked(int32_t fd, const uint8_t *buf, uint32_t len) {
     uint32_t request = len;
     uint32_t in_flight = s->snd_nxt - s->snd_una;
     if (in_flight >= s->snd_wnd) {
+        if (s->peer_fin) {
+            /* The peer closed its half while its window is still shut. A
+             * FIN_WAIT peer sends nothing further — no ACK, no window update —
+             * so parking here would wait forever and the socket row would
+             * never close. The response is undeliverable; fail the send so
+             * the owning coroutine releases the connection. */
+            return -1;
+        }
         /* Park the sending coroutine; tcp_input wakes it when an ACK opens space. */
         pm_metal_coop_task_t *cur = pm_metal_coop_current_task();
         if (cur != NULL) {
             s->waiter = cur;
         }
+        /* Bound the wait: retransmits cannot (everything sent was ACKed). */
+        s->wnd_stall_at = pm_metal_coop_mono_us() + PM_METAL_IP_WND_STALL_US;
         return 0;
     }
     uint32_t room = s->snd_wnd - in_flight;
@@ -900,7 +946,13 @@ int32_t pm_metal_net_ip_send(int32_t fd, const uint8_t *buf, uint32_t len) {
 
 int32_t pm_ip_recv_locked(int32_t fd, uint8_t *buf, uint32_t len) {
     struct pm_metal_sock *s = sock_get(fd, SK_TCP);
-    if (s == NULL || buf == NULL || s->tcp_error) {
+    if (s == NULL || buf == NULL) {
+        return -1;
+    }
+    /* Consume before the error returns too: a task that leaves here to fail
+     * and complete must not leave a park registration behind. */
+    sock_consume_park(s);
+    if (s->tcp_error) {
         return -1;
     }
     if (s->rx_len == 0) {
