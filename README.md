@@ -38,7 +38,7 @@ make -C extmod/metal ksweep      # every card through discover -> unit_compile
 make -C extmod/metal selfhost    # micro-rustc's fixed point, in eight stages
 ```
 
-`ksweep` is the readiness map (currently **85/85** cards compiled in-kernel;
+`ksweep` is the readiness map (currently **95/96** cards compiled in-kernel;
 refusals would name the next backend seam, not fail the build). `selfhost` is
 the loop that matters: boot's rustc compiles `__impl__.rs` to C (gen-1), `cc`
 builds a compiler from that, that compiler compiles `__impl__.rs` again
@@ -48,6 +48,10 @@ relocator, and the *linked* compiler's output is compared against gen-1 again
 — Rust → C → object → link → run, with no host `cc` in the last two stages.
 The C++ card does the same with its own `__impl__.c`.
 `tools/selfhost_cycle.sh` is the single source of truth for the stages.
+
+<p>
+  <img src="screenshots/selfhost-fixpoint.png" alt="The self-host cycle: gen-2 equals gen-1 byte for byte, then the linked compiler's output matches gen-1 again" width="820" />
+</p>
 
 ## The UI the seat serves
 
@@ -82,6 +86,22 @@ seat.
 
 <p>
   <img src="screenshots/factory-console.png" alt="Factory with the console pane open tall over it" width="820" />
+</p>
+
+## Two seats, one wire
+
+`make multi-e2e` builds one immutable UEFI image and boots it as two
+independent QEMU address spaces on a shared Ethernet segment. The seats find
+each other on their own (`metal-11`, `metal-12` — distinct Zenoh ZIDs), exchange
+UDP and service rosters over the shared L2, and the gate drives both live
+dashboards in headless Chromium and asserts the rendered DOM.
+
+<p>
+  <img src="screenshots/p2p-discovery.png" alt="Node A's P2P pane: neighbor metal-12 seen over the shared link, zenoh and services in sync" width="820" />
+</p>
+
+<p>
+  <img src="screenshots/services-remote.png" alt="Node A browsing node B's advertised httpd and ssh services — remote ownership" width="820" />
 </p>
 
 More stills, and how to refresh them: [`screenshots/`](screenshots/).
