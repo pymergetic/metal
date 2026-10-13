@@ -2667,3 +2667,14 @@ _(atomic_flag_clear_explicit):
 
 #endif
 #endif //__riscv
+
+/* This object contains no stack trampolines; mark its ELF stack non-executable.
+ * Without this note, GNU ld treats a linked host/µPy binary as requiring an
+ * executable stack even though all routines here use ordinary calls/returns. */
+#if defined(__ELF__)
+# if defined(__arm__) || defined(__aarch64__)
+        .section .note.GNU-stack,"",%progbits
+# else
+        .section .note.GNU-stack,"",@progbits
+# endif
+#endif
