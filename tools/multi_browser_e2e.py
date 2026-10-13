@@ -43,7 +43,12 @@ with sync_playwright() as pw:
         failures = []
         page.on("pageerror", lambda exc, f=failures: f.append(str(exc)))
         load_panel(page, base, "/p2p", "#p2p-self-host")
-        page.wait_for_function("([l,r]) => document.querySelector('#p2p-self-host')?.textContent.trim() === l && document.querySelector('#p2p-nb-table tbody')?.innerText.includes(r)", arg=[local, remote], timeout=60000)
+        # Both waits below are mesh convergence, not page speed: give the pair
+        # minutes (itself 30s+, longer under load), not the fetch budget.
+        # Measured: two TCG guests converge in ~4-5 minutes from cold boot
+        # while Chromium competes for the same cores, so 3 minutes raced a
+        # healthy pair and failed it. 6 minutes is the slow-machine budget.
+        page.wait_for_function("([l,r]) => document.querySelector('#p2p-self-host')?.textContent.trim() === l && document.querySelector('#p2p-nb-table tbody')?.innerText.includes(r)", arg=[local, remote], timeout=360000)
         assert "yes" in page.locator("#p2p-nb-table tbody").inner_text()
         for selector in ("#p2p-rpc-handlers", "#p2p-rpc-calls", "#p2p-ds-count", "#p2p-cc-count", "#p2p-ws-count"):
             page.wait_for_function("s => !document.querySelector(s)?.textContent.toLowerCase().includes('loading')", arg=selector, timeout=60000)
@@ -51,7 +56,7 @@ with sync_playwright() as pw:
         page = browser.new_page()
         page.on("pageerror", lambda exc, f=failures: f.append(str(exc)))
         load_panel(page, base, "/services", "#svc-host")
-        page.wait_for_function("r => [...document.querySelectorAll('#svc-host option')].some(o => o.textContent.includes(r))", arg=remote, timeout=60000)
+        page.wait_for_function("r => [...document.querySelectorAll('#svc-host option')].some(o => o.textContent.includes(r))", arg=remote, timeout=360000)
         option = page.locator("#svc-host option").filter(has_text=remote).first
         page.locator("#svc-host").select_option(option.get_attribute("value"))
         page.wait_for_function("r => document.querySelector('#svc-title')?.textContent.includes(r) && document.querySelectorAll('#svc-grid .service-card').length >= 2", arg=remote)

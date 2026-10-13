@@ -8,7 +8,11 @@ def get(base, path):
 
 a, b = sys.argv[1:3]
 last = None
-for _ in range(120):
+# Mesh convergence is not ours to rush: on an idle machine the peers see each
+# other in half a minute, under build load in several. A generous budget turns
+# a slow morning into patience instead of a timeout. Measured under TCG with
+# browser load alongside: ~4-5 minutes from cold boot, so the budget is 6.
+for _ in range(720):
     try:
         sa, sb = get(a, "/p2p/self"), get(b, "/p2p/self")
         aa, bb = get(a, "/p2p/services"), get(b, "/p2p/services")
