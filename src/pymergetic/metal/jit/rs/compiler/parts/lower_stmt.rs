@@ -91,8 +91,19 @@ impl Lower {
             pm_jit_rsx_ast_kind::STMT => {}
             pm_jit_rsx_ast_kind::BLOCK => unsafe { self.emit_block_stmt(s, locals) },
             pm_jit_rsx_ast_kind::MACRO => unsafe {
-                self.indent();
-                self.out.puts(b"/* macro skipped */\n\0".as_ptr());
+                /* A bare MACRO statement node (the exotic parse path —
+                 * the normal one wraps the macro in EXPR_STMT and emits
+                 * through emit_expr). An assert statement must never be
+                 * dropped silently, so route it through the assert
+                 * lowering; the other statement macros keep the skip. */
+                if self.assert_macro_kind((*s).text, (*s).text_len) != 0 {
+                    self.indent();
+                    self.emit_assert_macro(s, locals);
+                    self.out.puts(b";\n\0".as_ptr());
+                } else {
+                    self.indent();
+                    self.out.puts(b"/* macro skipped */\n\0".as_ptr());
+                }
             },
             pm_jit_rsx_ast_kind::ASSIGN => {
                 self.indent();

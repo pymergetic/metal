@@ -1507,6 +1507,12 @@ impl Lower {
                             return;
                         }
                     }
+                    /* assert! / assert_eq! / assert_ne! — the test-face
+                     * assertion macros, lowered to the subset's own fail
+                     * path (see emit_assert_macro). */
+                    if self.emit_assert_macro(e, locals) {
+                        return;
+                    }
                     self.err(b"unsupported: expression macro\0".as_ptr(), (*e).line);
                     return;
                 }
@@ -3633,6 +3639,70 @@ impl Lower {
      * the one face, integers in decimal), the last statement yields _f.
      * Returns true when the MACRO node was a format! (emission done),
      * false when the macro is something else. */
+    /* assert! / assert_eq! / assert_ne! — the test-face assertion macros.
+     *
+     * The subset prints no messages, so the lowering is the honest minimal
+     * check: a statement that re-raises (abort(), the same fail path the
+     * container ops make on allocation failure) when the check fails.
+     * `assert_eq!` compares == / `assert_ne!` compares !=; the operands
+     * lower with the full expression grammar (one evaluation each).
+     * A trailing message is accepted — lazy in Rust, moot under
+     * abort-on-fail — its format literal carried as a C comment and its
+     * lazy args dropped with the failure path (see assert_macro_scan). */
+    unsafe fn emit_assert_macro(
+        &mut self,
+        e: *const pm_jit_rsx_ast_t,
+        locals: *mut LocalTab,
+    ) -> bool {
+        let kind = unsafe { self.assert_macro_kind((*e).text, (*e).text_len) };
+        if kind == 0 {
+            return false;
+        }
+        self.assert_used = true;
+        let mut args: [*mut pm_jit_rsx_ast_t; 2] = [core::ptr::null_mut(); 2];
+        let mut args_n = 0usize;
+        let mut msg: *mut pm_jit_rsx_ast_t = core::ptr::null_mut();
+        if !unsafe {
+            self.assert_macro_scan(
+                (*e).text,
+                (*e).text_len,
+                locals,
+                kind,
+                args.as_mut_ptr(),
+                &mut args_n,
+                &mut msg,
+            )
+        } {
+            return false;
+        }
+        if !self.ok {
+            return true;
+        }
+        /* the message's format literal rides as a comment: the subset's
+         * fail path aborts without a message face, but the text the card
+         * authored must survive into the generated C. */
+        if !msg.is_null() {
+            let mt = unsafe { (*msg).text };
+            let mtl = unsafe { (*msg).text_len };
+            self.out.puts(b"/* assert: \0".as_ptr());
+            self.out.put(unsafe { mt.add(1) }, mtl - 2);
+            self.out.puts(b" */\0".as_ptr());
+        }
+        self.out.puts(b"(void)((\0".as_ptr());
+        if kind == 1 {
+            unsafe { self.emit_expr(args[0], locals) };
+        } else {
+            let op: *const u8 = if kind == 2 { b"==\0".as_ptr() } else { b"!=\0".as_ptr() };
+            unsafe { self.emit_expr(args[0], locals) };
+            self.out.putc(b' ');
+            self.out.puts(op);
+            self.out.putc(b' ');
+            unsafe { self.emit_expr(args[1], locals) };
+        }
+        self.out.puts(b") || (abort(), 0))\0".as_ptr());
+        true
+    }
+
     unsafe fn emit_format_value(
         &mut self,
         e: *const pm_jit_rsx_ast_t,

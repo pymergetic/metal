@@ -7,6 +7,14 @@
 #![no_std]
 #![allow(clippy::missing_safety_doc)]
 #![allow(non_camel_case_types)]
+// Same posture as metal.rs / the wasmmod crate root: this crate's muscle
+// is C-ABI faces and raw-pointer code in the pre-2024 `unsafe fn` style
+// (no inner blocks), and it splices the jit.rs compiler's flat TU —
+// edition 2024's unsafe-op-in-unsafe-fn fires across that whole TU on
+// every firmware/emcc seat. The crate-wide allow keeps the deliberate
+// style lint-clean without a forest of redundant inner `unsafe {}`
+// blocks carrying no extra safety information.
+#![allow(unsafe_op_in_unsafe_fn)]
 
 extern crate alloc;
 
@@ -196,6 +204,16 @@ macro_rules! PM_MOD_BOOTDEP_RS {
 pub mod util;
 pub mod wasmmod;
 
+/* asgi mirrors the C ABI it consumes (unit self-containment: its unit
+ * compiles alone in-kernel, so it declares pm_util_limits_* and the
+ * pm_util_* types itself). The util.limits card's generated face is the
+ * second mirror of the same C symbols — the C headers are the one
+ * definition; each Rust unit is a nominal twin of it. Where this port
+ * splices both into one crate the nominal twins clash (same symbol,
+ * same C layout, distinct Rust types) — clashing_extern_declarations is
+ * exactly that seam, and the port (which owns the splice) is where it
+ * is allowed. Inert on every other seat — no second decl exists there. */
+#[allow(clashing_extern_declarations)]
 #[path = "../../src/pymergetic/metal/net/http/asgi/__impl__.rs"]
 mod asgi;
 
@@ -206,5 +224,19 @@ mod asgi;
  * form is assembled into the port build dir (make passes the path in
  * PM_FW_RSX_FLAT — include! is a macro, so concat!/env! resolve it). */
 mod rs_compiler {
+    /* The jit.rs compiler card's own scoped-allow posture (the metal seat
+     * carries the same list on its compiler module, compiler.rs): the
+     * subset's C-idiom residue — scratch bindings it names in one C scope
+     * (unused_variables), per-fill `mut` on deferred-init locals
+     * (unused_mut), redundant parens in C-spelling exprs (unused_parens).
+     * Each is inert to the generated C and to the selfhost cycle.
+     * unused_unsafe and unused_assignments stay live so no redundant
+     * wrapper or dead store creeps in. Scoped to this card only — the
+     * rest of this crate keeps every lint live. */
+    #![allow(unused_variables)]
+    #![allow(unused_mut)]
+    #![allow(unused_parens)]
+    #![warn(unused_unsafe)]
+    #![warn(unused_assignments)]
     include!(concat!(env!("PM_FW_RSX_FLAT")));
 }

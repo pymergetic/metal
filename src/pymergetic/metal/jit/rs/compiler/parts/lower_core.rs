@@ -237,6 +237,12 @@ struct Lower {
      * (getenv) when the String plane has not already. */
     unistd_used: bool,
     env_used: bool,
+    /* the assert plane: assert!/assert_eq!/assert_ne! lower to the
+     * subset's own fail path (abort(), the same call the container ops
+     * make on allocation failure) — so an assert-armed unit pulls in
+     * <stdlib.h> with the env plane's window. Armed at both typing and
+     * emission, and at the preamble scan (a body assert arms late). */
+    assert_used: bool,
     /* the path-metadata plane: Path::exists()/is_dir()/is_file() pull
      * in <sys/stat.h> (stat/S_ISDIR/S_ISREG) — one flag for the one
      * include, armed at both typing and emission (either pass may run
@@ -1463,6 +1469,207 @@ impl Lower {
         *name_io = unsafe { text.add(start) };
         *name_len_io = i - start;
         1
+    }
+
+    /* assert! / assert_eq! / assert_ne! — the test-face assertion macros.
+     * The MACRO node's text is the whole invocation `name!(..)`; the std
+     * path spellings (`core::assert_eq!`, `std::assert_ne!`, `::core::..`)
+     * strip their prefix first, the same way format! strips alloc::.
+     * Returns 1 (assert!), 2 (assert_eq!), 3 (assert_ne!), 0 otherwise. */
+    unsafe fn assert_macro_kind(&self, text: *const u8, text_len: usize) -> usize {
+        if text.is_null() {
+            return 0;
+        }
+        let mut sp = text;
+        let mut sl = text_len;
+        /* optional leading `::` then one `core::` / `std::` segment */
+        if sl >= 2 && unsafe { *sp } == b':' && unsafe { *sp.add(1) } == b':' {
+            sp = unsafe { sp.add(2) };
+            sl -= 2;
+        }
+        if sl >= 6 && unsafe { z_eq(sp, 6, b"core::\0".as_ptr()) } {
+            sp = unsafe { sp.add(6) };
+            sl -= 6;
+        } else if sl >= 5 && unsafe { z_eq(sp, 5, b"std::\0".as_ptr()) } {
+            sp = unsafe { sp.add(5) };
+            sl -= 5;
+        }
+        if sl >= 8 && unsafe { z_eq(sp, 8, b"assert!(\0".as_ptr()) } {
+            return 1;
+        }
+        if sl >= 11 && unsafe { z_eq(sp, 11, b"assert_eq!(\0".as_ptr()) } {
+            return 2;
+        }
+        if sl >= 11 && unsafe { z_eq(sp, 11, b"assert_ne!(\0".as_ptr()) } {
+            return 3;
+        }
+        0
+    }
+
+    /* Sub-lex and sub-parse the assert invocation's argument list with
+     * the full expression grammar (same machinery as
+     * format_macro_scan_named — never a hand-rolled scan of the argument
+     * expressions). kind 1 takes one condition; kinds 2/3 take exactly
+     * two operands; a trailing message (`assert!(c, "fmt {}", x)`) is
+     * accepted after them — Rust evaluates it lazily on the failure path
+     * only, and the subset's failure path is abort(), so the message
+     * args are dropped with the process instead of formatted. The
+     * message's format literal is kept (msg_out) so the lowering can
+     * carry its text in the generated C. The first message token must be
+     * a string literal (the format string rustc also demands); a form
+     * outside these rules refuses: never a silent drop. Returns true
+     * when the invocation was an assert macro (even if its body
+     * refused), false otherwise. */
+    unsafe fn assert_macro_scan(
+        &mut self,
+        text: *const u8,
+        tlen: usize,
+        locals: *mut LocalTab,
+        kind: usize,
+        args: *mut *mut pm_jit_rsx_ast_t,
+        args_n: *mut usize,
+        msg_out: *mut *mut pm_jit_rsx_ast_t,
+    ) -> bool {
+        if kind == 0 {
+            return false;
+        }
+        let head_len: usize = if kind == 1 { 8 } else { 11 };
+        let mut sp = text;
+        let mut sl = tlen;
+        if sl >= 2 && unsafe { *sp } == b':' && unsafe { *sp.add(1) } == b':' {
+            sp = unsafe { sp.add(2) };
+            sl -= 2;
+        }
+        if sl >= 6 && unsafe { z_eq(sp, 6, b"core::\0".as_ptr()) } {
+            sp = unsafe { sp.add(6) };
+            sl -= 6;
+        } else if sl >= 5 && unsafe { z_eq(sp, 5, b"std::\0".as_ptr()) } {
+            sp = unsafe { sp.add(5) };
+            sl -= 5;
+        }
+        if sl < head_len + 1 {
+            unsafe {
+                self.err(b"unsupported: assert form\0".as_ptr(), 0);
+            }
+            return true;
+        }
+        /* body: [sp+head_len, sl-1) — the invocation's last byte is `)` */
+        if unsafe { *sp.add(sl - 1) } != b')' {
+            unsafe {
+                self.err(b"unsupported: assert form\0".as_ptr(), 0);
+            }
+            return true;
+        }
+        let body = unsafe { sp.add(head_len) };
+        let blen = sl - head_len - 1;
+        /* sub-lex the body */
+        let mut toks: pm_jit_rsx_toklist_t = pm_jit_rsx_toklist_t {
+            toks: core::ptr::null_mut(),
+            n_toks: 0,
+        };
+        if unsafe {
+            pm_metal_jit_rsx_lex(
+                self.arena,
+                body,
+                blen,
+                &mut toks,
+                self.errbuf,
+                self.errcap,
+            )
+        } != 0
+        {
+            return true;
+        }
+        let mut p = Parser {
+            arena: self.arena,
+            toks: toks.toks,
+            n_toks: toks.n_toks,
+            at: 0,
+            nd: Node {
+                arena: self.arena,
+                errbuf: self.errbuf,
+                errcap: self.errcap,
+                errline: 0,
+                ok: true,
+            },
+            ok: true,
+            cond_ctx: false,
+            chain_ctx: false,
+            shr_closes: 0,
+            feats: core::ptr::null(),
+        };
+        let mut got: [*mut pm_jit_rsx_ast_t; 3] = [core::ptr::null_mut(); 3];
+        let mut n = 0usize;
+        while unsafe { p.kind(p.at) } != pm_jit_rsx_tok_kind::END {
+            let a = unsafe { p.parse_expr() };
+            if !p.ok || a.is_null() {
+                unsafe {
+                    self.err(b"unsupported: assert argument\0".as_ptr(), 0);
+                }
+                return true;
+            }
+            if n < 3 {
+                got[n] = a;
+                n += 1;
+            }
+            if unsafe { p.is_punct(p.at, b',') } {
+                p.at += 1;
+                continue;
+            }
+            break;
+        }
+        if unsafe { p.kind(p.at) } != pm_jit_rsx_tok_kind::END {
+            unsafe {
+                self.err(b"unsupported: assert trailing tokens\0".as_ptr(), 0);
+            }
+            return true;
+        }
+        let want: usize = if kind == 1 { 1 } else { 2 };
+        if n < want {
+            unsafe {
+                self.err(b"unsupported: assert form\0".as_ptr(), 0);
+            }
+            return true;
+        }
+        /* the message, when present: its first token must be the format
+         * string literal (rustc demands the same), the lazy args after it
+         * are dropped with the failure path. */
+        let mut msg: *mut pm_jit_rsx_ast_t = core::ptr::null_mut();
+        if n > want {
+            let m = got[want];
+            let mt = unsafe { (*m).text };
+            let mtl = unsafe { (*m).text_len };
+            if unsafe { (*m).kind } != pm_jit_rsx_ast_kind::LITERAL
+                || mtl < 2
+                || unsafe { *mt } != b'"'
+            {
+                unsafe {
+                    self.err(b"unsupported: assert message\0".as_ptr(), 0);
+                }
+                return true;
+            }
+            /* the carried comment ends at the first star-slash pair
+             * inside the message — refuse one. */
+            let mut j = 1usize;
+            while j + 1 < mtl {
+                if unsafe { *mt.add(j) } == b'*' && unsafe { *mt.add(j + 1) } == b'/' {
+                    unsafe {
+                        self.err(b"unsupported: assert message\0".as_ptr(), 0);
+                    }
+                    return true;
+                }
+                j += 1;
+            }
+            msg = m;
+        }
+        unsafe { *msg_out = msg };
+        let mut k = 0usize;
+        while k < want {
+            unsafe { *args.add(k) = got[k] };
+            k += 1;
+        }
+        *args_n = want;
+        true
     }
 
     /* Is a MACRO node one of the plane's expression macros (vec!,
@@ -3447,6 +3654,14 @@ impl Lower {
                     let n3 = unsafe { zput(out, cap, 0, b"const char *\0".as_ptr()) };
                     return if n3 >= cap { 0 } else { n3 };
                 }
+            }
+            /* assert! / assert_eq! / assert_ne! — unit-typed like the
+             * print family (a statement macro carries no value), and the
+             * arm sets the assert plane so the preamble pulls <stdlib.h>
+             * for the abort() fail path before any body can name it. */
+            if unsafe { self.assert_macro_kind((*e).text, (*e).text_len) } != 0 {
+                self.assert_used = true;
+                return 0;
             }
             return 0;
         }

@@ -120,7 +120,11 @@ unsafe extern "C" {
 }
 
 /* The C enum is generated from the X-macro table by position, so the Rust
- * mirrors must list them in the same order (values are positional). */
+ * mirrors must list them in the same order (values are positional).
+ * Per-item dead_code: these are cross-TU ABI mirrors — some rows are read
+ * only from the C side's tables (ERROR, GENERIC, WHERE), invisible to
+ * rustc's per-crate analysis. Same posture as the other cross-TU shims. */
+#[allow(dead_code)]
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum pm_jit_rsx_tok_kind {
@@ -161,6 +165,9 @@ pub enum pm_jit_rsx_tok_kind {
 }
 pub const TOK_KIND_COUNT: u32 = 34;
 
+/* Same cross-TU ABI mirror as the token kinds (GENERIC/WHERE are read from
+ * the C side's tables only). */
+#[allow(dead_code)]
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum pm_jit_rsx_ast_kind {

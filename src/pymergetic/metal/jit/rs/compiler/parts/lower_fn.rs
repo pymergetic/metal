@@ -2599,7 +2599,7 @@ impl Lower {
         if self.unistd_used {
             self.out.puts(b"#include <unistd.h>\n\0".as_ptr());
         }
-        if self.env_used {
+        if self.env_used || self.assert_used {
             self.out.puts(b"#include <stdlib.h>\n\0".as_ptr());
         }
         /* the path-metadata plane's include: stat/S_ISDIR/S_ISREG need
@@ -3180,6 +3180,12 @@ impl Lower {
             } != 0
             {
                 self.env_used = true;
+            }
+            /* assert!/assert_eq!/assert_ne! — the abort() fail path
+             * needs <stdlib.h> (same include), armed here so a body
+             * assert hoists it to the preamble window. */
+            if unsafe { self.assert_macro_kind((*e).text, (*e).text_len) } != 0 {
+                self.assert_used = true;
             }
         }
         let kids = unsafe { (*e).kids };

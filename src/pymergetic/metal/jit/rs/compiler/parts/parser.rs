@@ -3800,36 +3800,39 @@ impl Parser {
         if !self.ok {
             return e;
         }
+        /* A macro invocation right after the expression opens the NEXT
+         * statement (`mac1!() mac2!();` — a macro statement may come
+         * semicolon-less): wrap `e` as its own statement and leave the
+         * macro token for the next parse_stmt. Never drop `e` here —
+         * both branches below used to swallow the pair (the first
+         * statement vanished, the second came back as a bare MACRO node
+         * the lowering skipped). */
         if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::MACRO_INVOC {
-            let m = unsafe {
-                self.mk(
-                    pm_jit_rsx_ast_kind::MACRO,
-                    line,
-                    self.text(self.at),
-                    self.text_len(self.at),
-                )
-            };
-            self.at += 1;
-            if unsafe { self.is_punct(self.at, b';') } {
-                self.at += 1;
+            let n = unsafe { self.mk(pm_jit_rsx_ast_kind::EXPR_STMT, line, b";\0".as_ptr(), 1) };
+            let mut kids = Kids::new();
+            unsafe {
+                kids.add(e, self.arena);
             }
-            return m;
+            unsafe {
+                self.set_kids(n, &kids);
+            }
+            return n;
         }
         let had_semi = unsafe { self.is_punct(self.at, b';') };
         if had_semi {
             self.at += 1;
         }
+        /* after the `;` a macro token is likewise the next statement */
         if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::MACRO_INVOC {
-            let m = unsafe {
-                self.mk(
-                    pm_jit_rsx_ast_kind::MACRO,
-                    line,
-                    self.text(self.at),
-                    self.text_len(self.at),
-                )
-            };
-            self.at += 1;
-            return m;
+            let n = unsafe { self.mk(pm_jit_rsx_ast_kind::EXPR_STMT, line, b";\0".as_ptr(), 1) };
+            let mut kids = Kids::new();
+            unsafe {
+                kids.add(e, self.arena);
+            }
+            unsafe {
+                self.set_kids(n, &kids);
+            }
+            return n;
         }
         /* Block-like tail expr (no semicolon) is the block value. */
         if !had_semi {
