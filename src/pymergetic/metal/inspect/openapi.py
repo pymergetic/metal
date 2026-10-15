@@ -188,6 +188,67 @@ def build():
             "/capabilities": {
                 "get": _op("capabilities", {"type": "object"}, tags=["system"]),
             },
+            "/ai/state": {
+                "get": _op(
+                    "AI hub state (tools, providers, sessions, config, MCP)",
+                    {"type": "object"},
+                    tags=["ai"],
+                ),
+            },
+            "/ai/session": {
+                "get": _op(
+                    "browse one session's record + messages (?id=N)",
+                    {"type": "object"},
+                    tags=["ai"],
+                ),
+            },
+            "/ai/provider": {
+                "get": _op(
+                    "browse one provider's record (?name=X)",
+                    {"type": "object"},
+                    tags=["ai"],
+                ),
+            },
+            "/ai/provider/set": {
+                "post": _op(
+                    "create / edit a model provider (?name&url&model&api_key)",
+                    {"type": "object"},
+                    tags=["ai"],
+                ),
+            },
+            "/ai/provider/remove": {
+                "post": _op("remove a provider (?name)", {"type": "object"}, tags=["ai"]),
+            },
+            "/ai/session/create": {
+                "post": _op("create a chat session (?name)", {"type": "object"}, tags=["ai"]),
+            },
+            "/ai/session/append": {
+                "post": _op(
+                    "append a message to a session (?id&role&content)",
+                    {"type": "object"},
+                    tags=["ai"],
+                ),
+            },
+            "/ai/session/persist": {
+                "post": _op(
+                    "set a session's persistence (?id&persistent)",
+                    {"type": "object"},
+                    tags=["ai"],
+                ),
+            },
+            "/ai/config/set": {
+                "post": _op("set a config param (?key&value)", {"type": "object"}, tags=["ai"]),
+            },
+            "/ai/mcp/start": {
+                "post": _op(
+                    "create + start an MCP server (?name&transport&command&sse_url&timeout_ms)",
+                    {"type": "object"},
+                    tags=["ai"],
+                ),
+            },
+            "/ai/mcp/stop": {
+                "post": _op("stop an MCP server (?name)", {"type": "object"}, tags=["ai"]),
+            },
             "/inspect/self": {
                 "get": _op("self description", {"type": "object"}, tags=["inspect"]),
             },

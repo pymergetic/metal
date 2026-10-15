@@ -1,0 +1,118 @@
+{% args d %}
+<section class="hero">
+  <p class="eyebrow">seat</p>
+  <h1>AI</h1>
+  <p class="lede">
+    The <code>pymergetic.metal.ai</code> hub, live on this seat: the tool
+    registry, the model providers, the chat sessions, and the config / MCP
+    cards the hub drives. Every number is read live from <code>/ai/state</code>
+    — the same JSON any other client gets. A seat where the hub is idle answers
+    the same keys with empty lists; nothing here is a second console. Click a
+    provider or session to <strong>browse</strong> its record; use the factory
+    below to <strong>create / edit / remove</strong> hub objects — every write
+    goes through the same <code>/ai/…</code> face any other client uses.
+  </p>
+</section>
+
+<section class="seat-panel">
+  <h2>Hub</h2>
+  <p class="hint" id="ai-status">loading /ai/state…</p>
+  <div class="seat-controls">
+    <button type="button" id="ai-reload">Reload</button>
+  </div>
+  <div class="seat-cols">
+    <div>
+      <h3>Registry</h3>
+      <p class="hint">Tools registered on this seat (PM_MOD tool table).</p>
+      <div id="ai-tools"></div>
+    </div>
+    <div>
+      <h3>Providers</h3>
+      <p class="hint">Model providers and the sessions they drive. Click to browse.</p>
+      <div id="ai-providers"></div>
+    </div>
+    <div>
+      <h3>Sessions</h3>
+      <p class="hint">Chat sessions and their message counts. Click to browse messages.</p>
+      <div id="ai-sessions"></div>
+    </div>
+  </div>
+  <div id="ai-detail" class="muted">Click a provider or session above to browse its record.</div>
+</section>
+
+<section class="seat-panel">
+  <h2>Factory</h2>
+  <p class="hint">Create, edit, and remove hub objects. Each form posts to one
+    <code>/ai/…</code> write face and the pane re-reads <code>/ai/state</code>
+    after it lands.</p>
+  <div class="seat-cols">
+    <div>
+      <h3>Provider</h3>
+      <form id="ai-provider-form" class="seat-controls">
+        <input name="name" placeholder="name" required>
+        <input name="url" placeholder="url">
+        <input name="model" placeholder="model">
+        <input name="api_key" placeholder="api key">
+        <button type="submit">Save provider</button>
+      </form>
+    </div>
+    <div>
+      <h3>Session</h3>
+      <form id="ai-session-form" class="seat-controls">
+        <input name="name" placeholder="session name" required>
+        <button type="submit">Create session</button>
+      </form>
+      <form id="ai-append-form" class="seat-controls">
+        <input name="id" placeholder="session id" required>
+        <select name="role">
+          <option value="0">user</option>
+          <option value="1">assistant</option>
+          <option value="2">system</option>
+        </select>
+        <input name="content" placeholder="message" required>
+        <button type="submit">Append</button>
+      </form>
+    </div>
+    <div>
+      <h3>Config</h3>
+      <form id="ai-config-form" class="seat-controls">
+        <input name="key" placeholder="key" required>
+        <input name="value" placeholder="value">
+        <button type="submit">Set param</button>
+      </form>
+      <h3>MCP server</h3>
+      <form id="ai-mcp-form" class="seat-controls">
+        <input name="name" placeholder="server name" required>
+        <select name="transport">
+          <option value="0">stdio</option>
+          <option value="1">sse</option>
+        </select>
+        <input name="command" placeholder="command (stdio)">
+        <input name="sse_url" placeholder="sse url">
+        <input name="timeout_ms" placeholder="timeout ms" value="5000">
+        <button type="submit">Start server</button>
+      </form>
+    </div>
+  </div>
+  <p class="hint" id="ai-factory-status"></p>
+</section>
+
+<section class="seat-panel">
+  <h2>Config &amp; MCP</h2>
+  <p class="hint">Hub parameters and the Model Context Protocol servers
+    discovered on this seat.</p>
+  <div class="seat-cols">
+    <div>
+      <h3>Parameters</h3>
+      <pre id="ai-config"></pre>
+    </div>
+    <div>
+      <h3>MCP servers</h3>
+      <pre id="ai-mcp"></pre>
+    </div>
+  </div>
+  <details>
+    <summary>raw /ai/state JSON</summary>
+    <pre id="ai-raw"></pre>
+  </details>
+</section>

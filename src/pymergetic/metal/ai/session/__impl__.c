@@ -94,6 +94,10 @@ void pm_metal_ai_session_deinit(void) {
     s_sessions_cap = 0;
     s_session_count = 0;
     s_next_id = 1;
+    /* Drop the arena too: a caller may free this arena right after deinit
+     * (the test harness does), so a stale pointer here becomes a use-after-
+     * free the moment the next create/find grows the table. */
+    s_arena = NULL;
 }
 
 int32_t pm_metal_ai_session_create(const char *name, uint32_t *out_id) {
@@ -131,6 +135,7 @@ int32_t pm_metal_ai_session_find(uint32_t id, pm_metal_ai_session_t *out) {
     memcpy(out->name, s_sessions[slot].name, sizeof(out->name));
     out->msg_count = s_sessions[slot].msg_count;
     out->persistent = s_sessions[slot].persistent;
+    out->id = s_sessions[slot].id;
     return 0;
 }
 
@@ -152,6 +157,7 @@ int32_t pm_metal_ai_session_nth(uint32_t n, pm_metal_ai_session_t *out) {
             memcpy(out->name, s_sessions[i].name, sizeof(out->name));
             out->msg_count = s_sessions[i].msg_count;
             out->persistent = s_sessions[i].persistent;
+            out->id = s_sessions[i].id;
             return 0;
         }
         seen++;

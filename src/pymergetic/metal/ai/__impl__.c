@@ -74,6 +74,9 @@ void pm_metal_ai_deinit(void) {
     s_tools_cap = 0;
     s_tool_n = 0;
     s_ready = 0;
+    /* Drop the arena: the caller may free it right after deinit, so keeping
+     * the pointer here turns the next tool_register/grow into a UAF. */
+    s_arena = NULL;
 }
 
 int32_t pm_metal_ai_tool_register(const char *name, const char *description,

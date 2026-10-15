@@ -5,15 +5,22 @@
 #include "pymergetic/metal/jit/c/__types__.h"
 #include "pymergetic/metal/net/http.h"
 #include "pymergetic/metal/net/http/asgi.h"
+/* The AI read/write faces reach into the ai hub, so the test brings it up on
+ * its own arena first (same call boot makes). */
+#include "pymergetic/metal/ai/__exports__.h"
+#include "pymergetic/util/mem.h"
 #include "pymergetic/wasmmod/guest.h"
 #include "pymergetic/wasmmod/registry.h"
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define LO4 0x7f000001u
 #define INSPECT_PORT 8090
+/* Arena span for the test's ai hub (mirrors the ai card's own harness). */
+#define INSPECT_TST_SPAN (256u * 1024u)
 
 static int32_t fail(const char *why) {
     fprintf(stderr, "metal.inspect test: %s\n", why);
@@ -65,6 +72,73 @@ static int32_t case_handle(void) {
     body = pm_metal_inspect_body();
     if (body == NULL || strstr(body, "pymergetic.metal") == NULL) {
         return fail("reg body");
+    }
+    /* The AI pane's live read face: the hub's tool registry + provider /
+     * session / config / MCP counts over the same boot-wired ai card. */
+    if (pm_metal_inspect_handle("GET", "/ai/state") != 200) {
+        return fail("ai state status");
+    }
+    body = pm_metal_inspect_body();
+    if (body == NULL || strstr(body, "\"note\":\"live_ai_hub\"") == NULL
+        || strstr(body, "\"providers\":") == NULL
+        || strstr(body, "\"sessions\":") == NULL
+        || strstr(body, "\"tools\":") == NULL
+        || strstr(body, "\"mcp\":") == NULL) {
+        return fail("ai state body");
+    }
+    /* AI Factory (write) + Browse (drill-down) faces. Create a provider, a
+     * session and a config param, append + browse the session's messages, then
+     * remove the provider — the same /ai/… faces the JS pane drives. */
+    if (pm_metal_inspect_handle("POST",
+            "/ai/provider/set?name=probe&url=http%3A%2F%2Fx&model=m&api_key=k") != 200) {
+        return fail("ai provider set status");
+    }
+    body = pm_metal_inspect_body();
+    if (body == NULL || strstr(body, "\"ok\":true") == NULL) {
+        return fail("ai provider set body");
+    }
+    if (pm_metal_inspect_handle("GET", "/ai/provider?name=probe") != 200) {
+        return fail("ai provider browse status");
+    }
+    body = pm_metal_inspect_body();
+    if (body == NULL || strstr(body, "\"name\":\"probe\"") == NULL) {
+        return fail("ai provider browse body");
+    }
+    if (pm_metal_inspect_handle("POST", "/ai/session/create?name=probe") != 200) {
+        return fail("ai session create status");
+    }
+    body = pm_metal_inspect_body();
+    if (body == NULL || strstr(body, "\"ok\":true") == NULL) {
+        return fail("ai session create body");
+    }
+    {
+        const char *idp = strstr(body, "\"id\":");
+        long sid = idp != NULL ? strtol(idp + 5, NULL, 10) : -1;
+        char append[128];
+        char browse[64];
+        snprintf(append, sizeof(append),
+            "/ai/session/append?id=%ld&role=0&content=hello", sid);
+        snprintf(browse, sizeof(browse), "/ai/session?id=%ld", sid);
+        if (sid < 0 || pm_metal_inspect_handle("POST", append) != 200) {
+            return fail("ai session append");
+        }
+        body = pm_metal_inspect_body();
+        if (body == NULL || strstr(body, "\"ok\":true") == NULL) {
+            return fail("ai session append body");
+        }
+        if (pm_metal_inspect_handle("GET", browse) != 200) {
+            return fail("ai session browse status");
+        }
+        body = pm_metal_inspect_body();
+        if (body == NULL || strstr(body, "hello") == NULL) {
+            return fail("ai session browse body");
+        }
+    }
+    if (pm_metal_inspect_handle("POST", "/ai/config/set?key=probe&value=v") != 200) {
+        return fail("ai config set");
+    }
+    if (pm_metal_inspect_handle("POST", "/ai/provider/remove?name=probe") != 200) {
+        return fail("ai provider remove");
     }
     if (pm_metal_inspect_handle("GET", "/inspect/reg/completeness?fmt=tree") != 200) {
         return fail("tree status");
@@ -734,22 +808,30 @@ static int32_t case_export_manifest(void) {
 }
 
 int32_t pm_metal_inspect_tests(void) {
-    if (case_handle() != 0) {
-        return 1;
+    /* Bring the ai hub up on a test arena before the AI faces run: without it
+     * the hub is uninitialised (or worse, left dangling by an earlier card's
+     * teardown) and the /ai/... write faces have nothing valid to write into. */
+    void *backing = malloc(INSPECT_TST_SPAN);
+    pm_util_mem_arena_t *arena;
+    int32_t rc = 0;
+    if (backing == NULL) return fail("malloc");
+    arena = pm_util_mem_arena_create(backing, INSPECT_TST_SPAN);
+    if (arena == NULL) { free(backing); return fail("arena-create"); }
+    if (pm_metal_ai_init(arena) != 0) {
+        pm_util_mem_arena_destroy(arena); free(backing);
+        return fail("ai-init");
     }
-    if (case_http() != 0) {
-        return 1;
+    if (case_handle() != 0
+        || case_http() != 0
+        || case_docs_sweep() != 0
+        || case_build_face() != 0
+        || case_export_manifest() != 0) {
+        rc = 1;
     }
-    if (case_docs_sweep() != 0) {
-        return 1;
-    }
-    if (case_build_face() != 0) {
-        return 1;
-    }
-    if (case_export_manifest() != 0) {
-        return 1;
-    }
-    return 0;
+    pm_metal_ai_deinit();
+    pm_util_mem_arena_destroy(arena);
+    free(backing);
+    return rc;
 }
 
 PM_MOD_TEST_C(pymergetic.metal.inspect, tests, pm_metal_inspect_tests);

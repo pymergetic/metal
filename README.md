@@ -38,7 +38,7 @@ make -C extmod/metal ksweep      # every card through discover -> unit_compile
 make -C extmod/metal selfhost    # micro-rustc's fixed point, in eight stages
 ```
 
-`ksweep` is the readiness map (currently **95/96** cards compiled in-kernel;
+`ksweep` is the readiness map (currently **96/96** cards compiled in-kernel;
 refusals would name the next backend seam, not fail the build). `selfhost` is
 the loop that matters: boot's rustc compiles `__impl__.rs` to C (gen-1), `cc`
 builds a compiler from that, that compiler compiles `__impl__.rs` again

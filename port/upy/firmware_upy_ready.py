@@ -29,6 +29,47 @@ body = inspect.body()
 if st != 200 or '"asgi":true' not in body or '"microdot":true' not in body or '"zenoh":true' not in body:
     raise RuntimeError("inspect caps")
 print("upy inspect caps")
+# The AI pane's live read face: /ai/state is the inspect JSON over the ai hub
+# (tools/providers/sessions/config/mcp) — the same fill the /ai UI pane fetches.
+# Wired on every seat; the fill is identical everywhere, the arrays are just
+# short where the hub is idle.
+st = inspect.handle("GET", "/ai/state")
+body = inspect.body()
+if st != 200 or '"note":"live_ai_hub"' not in body:
+    raise RuntimeError("ai state")
+print("upy ai state")
+# AI Factory (write) + Browse (drill-down): create a provider / session, append
+# + browse a message, then remove the provider. Same /ai/… the pane posts.
+st = inspect.handle("POST", "/ai/provider/set?name=probe&url=u&model=m")
+body = inspect.body()
+if st != 200 or '"ok":true' not in body:
+    raise RuntimeError("ai provider set")
+st = inspect.handle("GET", "/ai/provider?name=probe")
+body = inspect.body()
+if st != 200 or '"name":"probe"' not in body:
+    raise RuntimeError("ai provider browse")
+st = inspect.handle("POST", "/ai/session/create?name=probe")
+body = inspect.body()
+if st != 200 or '"ok":true' not in body:
+    raise RuntimeError("ai session create")
+sid = body.split('"id":')[1].split('}')[0]
+st = inspect.handle("POST", "/ai/session/append?id=%s&role=0&content=hello" % sid)
+body = inspect.body()
+if st != 200 or '"ok":true' not in body:
+    raise RuntimeError("ai session append")
+st = inspect.handle("GET", "/ai/session?id=%s" % sid)
+body = inspect.body()
+if st != 200 or 'hello' not in body:
+    raise RuntimeError("ai session browse")
+st = inspect.handle("POST", "/ai/config/set?key=probe&value=v")
+body = inspect.body()
+if st != 200 or '"ok":true' not in body:
+    raise RuntimeError("ai config set")
+st = inspect.handle("POST", "/ai/provider/remove?name=probe")
+body = inspect.body()
+if st != 200 or '"ok":true' not in body:
+    raise RuntimeError("ai provider remove")
+print("ai factory+browse")
 
 # metal.build change ledger: the seed materializes on the fs card and the
 # /changes read pane serves it - on firmware seats too (arena fs, no POSIX).
@@ -86,6 +127,10 @@ if ai.tool_count() != 0:
     raise RuntimeError("ai tools empty")
 if ai.tool_unregister("seat-probe-missing") != -1:
     raise RuntimeError("ai tool unregister miss")
+# The HTTP face test earlier (POST /ai/config/set?key=probe&value=v) persists
+# its param in the same store the Python face reads below. Clear it so the
+# roundtrip starts from an empty table (count 1 after set, 0 after delete).
+ai_config.param_delete("probe")
 if ai_config.param_set("seat-ai-probe", "1") != 0:
     raise RuntimeError("ai config param set")
 if ai_config.param_count() != 1:
@@ -100,10 +145,13 @@ if ai_provider.count() != 0:
     raise RuntimeError("ai providers empty")
 if ai_provider.remove("seat-probe-missing") != -1:
     raise RuntimeError("ai provider remove miss")
+# The HTTP face test earlier left its session open (there is no close route),
+# so assert the delta, not the absolute count.
+_sbase = ai_session.count()
 _sid = ai_session.create("seat-ai-probe")
-if _sid[0] != 0 or ai_session.count() != 1:
+if _sid[0] != 0 or ai_session.count() != _sbase + 1:
     raise RuntimeError("ai session create")
-if ai_session.close(_sid[1]) != 0 or ai_session.count() != 0:
+if ai_session.close(_sid[1]) != 0 or ai_session.count() != _sbase:
     raise RuntimeError("ai session close")
 if ai_mcp.server_count() != 0:
     raise RuntimeError("ai mcp servers empty")

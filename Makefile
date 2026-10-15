@@ -162,7 +162,7 @@ $(eval $(call tcc_instance,arm_eabi_cross,TCC_TARGET_ARM,$(CURDIR)/build/tcc/lib
 # (dlsym, -rdynamic) answers them for every in-kernel link — the same
 # posture as libgcc's __floatundixf shims in the build card's tests.
 TCC1_OBJS := $(CURDIR)/build/tcc/libtcc1.o $(CURDIR)/build/tcc/libtcc1_atomic.o \
-	$(CURDIR)/build/tcc/libtcc1_stdatomic.o
+	$(CURDIR)/build/tcc/libtcc1_stdatomic.o $(CURDIR)/build/tcc/libtcc1_alloca.o
 CPPFLAGS += -DTCC_TARGET_X86_64 -DPM_HAS_TCC=1 -I$(TCC_DIR) -DPM_METAL_TCC_LIB_DIR=\"$(TCC_DIR)\"
 CPPFLAGS += -DPM_METAL_TCC_CROSS_WASM32=1
 CPPFLAGS += -DPM_METAL_TCC_CROSS_ARM_EABI=1
@@ -276,6 +276,16 @@ $(CURDIR)/build/tcc/libtcc1.o: $(TCC_DIR)/lib/va_list.c
 $(CURDIR)/build/tcc/libtcc1_atomic.o: $(TCC_DIR)/lib/atomic.S
 	mkdir -p $(dir $@)
 	$(CC) -I$(TCC_DIR)/lib -c -o $@ $(TCC_DIR)/lib/atomic.S
+
+# alloca.S is the libtcc1 stack-allocator shim: TCC's codegen lowers a VLA
+# (or a __builtin_alloca) to a `call alloca`, and the shim adjusts the
+# caller's %rsp and returns the block. Without it the in-kernel link refuses
+# with an unresolved symbol (the inspect card hit exactly this). Same posture
+# as atomic.S above: defined in the host seat binary, answered by the build
+# card's process resolver's dlsym for every in-kernel link.
+$(CURDIR)/build/tcc/libtcc1_alloca.o: $(TCC_DIR)/lib/alloca.S
+	mkdir -p $(dir $@)
+	$(CC) -I$(TCC_DIR)/lib -c -o $@ $(TCC_DIR)/lib/alloca.S
 
 # stdatomic.c instantiates the __atomic_fetch_* / *_fetch families
 # (generated from one macro) on top of the load/store/cmpxchg primitives.

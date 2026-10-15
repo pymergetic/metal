@@ -17,6 +17,15 @@
 #include "pymergetic/metal/net/dstate/__exports__.h"
 #include "pymergetic/metal/net/cloud/__exports__.h"
 #include "pymergetic/metal/net/workspace/__exports__.h"
+/* The AI pane's read face: the ai hub's tool registry plus the provider /
+ * session / config / MCP cards it drives. Same direct C reads fill_self does
+ * over services/boot; the hub is boot-wired on every seat, so the counts and
+ * nth walks resolve everywhere the pane renders. */
+#include "pymergetic/metal/ai/__exports__.h"
+#include "pymergetic/metal/ai/provider/__exports__.h"
+#include "pymergetic/metal/ai/session/__exports__.h"
+#include "pymergetic/metal/ai/config/__exports__.h"
+#include "pymergetic/metal/ai/mcp/__exports__.h"
 /* Additional enumeration exports not yet in auto-generated headers. */
 uint32_t pm_metal_rpc_handler_count(void);
 const char *pm_metal_rpc_handler_key_at(uint32_t idx);
@@ -61,6 +70,7 @@ typedef struct {
 } js_t;
 
 static void js_hex(js_t *j, const uint8_t *data, uint32_t len);
+static void js_i32(js_t *j, int32_t v);
 
 static int js_ok(const js_t *j) {
     return j->n < j->max;
@@ -141,6 +151,70 @@ static int path_is(const char *path, const char *want) {
 
 static int path_has(const char *path, const char *needle) {
     return path != NULL && needle != NULL && strstr(path, needle) != NULL;
+}
+
+static int hexv(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* Copy one named query-string value (`?k=v&k2=v2`) out of `raw` into `buf`,
+ * URL-decoded (`%XX` and `+` -> space). Returns the length copied, 0 if the
+ * key is absent. This is how the AI Factory faces read their form fields: the
+ * write path is a POST whose parameters ride in the query string, matching
+ * how /inspect/call/ and /build already pass their args (no request-body
+ * parser in the freestanding libc). */
+static uint32_t qget(const char *raw, const char *key, char *buf, uint32_t max) {
+    const char *q, *k;
+    size_t klen;
+    uint32_t n = 0;
+    if (raw == NULL || key == NULL || buf == NULL || max == 0) return 0;
+    buf[0] = 0;
+    q = strchr(raw, '?');
+    if (q == NULL) return 0;
+    klen = strlen(key);
+    k = q + 1;
+    while (*k != 0) {
+        if (strncmp(k, key, klen) == 0 && k[klen] == '=') {
+            const char *v = k + klen + 1;
+            const char *e = strchr(v, '&');
+            if (e == NULL) e = v + strlen(v);
+            while (v < e && n + 1u < max) {
+                if (*v == '%' && v + 2 < e) {
+                    int h = hexv(v[1]);
+                    int l = hexv(v[2]);
+                    if (h >= 0 && l >= 0) {
+                        buf[n++] = (char)((h << 4) | l);
+                        v += 3;
+                        continue;
+                    }
+                }
+                if (*v == '+') { buf[n++] = ' '; v++; continue; }
+                buf[n++] = *v++;
+            }
+            buf[n] = 0;
+            return n;
+        }
+        k = strchr(k, '&');
+        if (k == NULL) break;
+        k++;
+    }
+    return 0;
+}
+
+/* The one shape every AI Factory write answers: {"ok":true} on success,
+ * {"ok":false,"rc":<code>} on a rejected call. The JS re-polls /ai/state
+ * after any ok, so the pane never renders a stale registry. */
+static void ai_reply(js_t *j, int32_t rc) {
+    if (rc == 0) {
+        js_raw(j, "{\"ok\":true}");
+        return;
+    }
+    js_raw(j, "{\"ok\":false,\"rc\":");
+    js_i32(j, rc);
+    js_ch(j, '}');
 }
 
 static int32_t mod_name(uint32_t i, char *buf, uint32_t buf_max, uint32_t *out_len) {
@@ -300,6 +374,218 @@ static void fill_reg(js_t *j, int tree) {
     } else {
         js_ch(j, '}');
     }
+}
+
+/* The AI pane's live read face (/ai/state): the hub's tool registry plus every
+ * provider / session / config param / MCP server the seat carries. Counts and
+ * nth walk exactly like fill_reg walks the wasmmod registry. api_key bytes are
+ * never echoed — only whether one is set. A seat with no providers registered
+ * answers the same keys with empty arrays (the fill is the same on every seat;
+ * the arrays are just short where the hub is idle). */
+static void fill_ai(js_t *j) {
+    uint32_t nprov = pm_metal_ai_provider_count();
+    uint32_t nsess = pm_metal_ai_session_count();
+    uint32_t ntool = pm_metal_ai_tool_count();
+    uint32_t nparam = pm_metal_ai_config_param_count();
+    uint32_t nserver = pm_metal_ai_mcp_server_count();
+    uint32_t i;
+
+    js_raw(j, "{\"schema\":1,\"counts\":{\"providers\":");
+    js_u32(j, nprov);
+    js_raw(j, ",\"sessions\":"); js_u32(j, nsess);
+    js_raw(j, ",\"tools\":"); js_u32(j, ntool);
+    js_raw(j, ",\"config\":"); js_u32(j, nparam);
+    js_raw(j, ",\"mcp\":"); js_u32(j, nserver);
+    js_raw(j, "},\"providers\":[");
+    for (i = 0; i < nprov; i++) {
+        pm_metal_ai_provider_t p;
+        if (pm_metal_ai_provider_nth(i, &p) != 0) continue;
+        if (i != 0) js_ch(j, ',');
+        js_raw(j, "{\"name\":"); js_str(j, p.name);
+        js_raw(j, ",\"url\":"); js_str(j, p.url);
+        js_raw(j, ",\"model\":"); js_str(j, p.model);
+        js_raw(j, ",\"api_key_set\":"); js_raw(j, p.api_key[0] ? "true" : "false");
+        js_ch(j, '}');
+    }
+    js_raw(j, "],\"sessions\":[");
+    for (i = 0; i < nsess; i++) {
+        pm_metal_ai_session_t s;
+        if (pm_metal_ai_session_nth(i, &s) != 0) continue;
+        if (i != 0) js_ch(j, ',');
+        js_raw(j, "{\"id\":"); js_u32(j, s.id);
+        js_raw(j, ",\"name\":"); js_str(j, s.name);
+        js_raw(j, ",\"msg_count\":"); js_u32(j, s.msg_count);
+        js_raw(j, ",\"persistent\":"); js_raw(j, s.persistent ? "true" : "false");
+        js_ch(j, '}');
+    }
+    js_raw(j, "],\"tools\":[");
+    for (i = 0; i < ntool; i++) {
+        pm_metal_ai_tool_t t;
+        if (pm_metal_ai_tool_nth(i, &t) != 0) continue;
+        if (i != 0) js_ch(j, ',');
+        js_raw(j, "{\"name\":"); js_str(j, t.name);
+        js_raw(j, ",\"description\":"); js_str(j, t.description);
+        js_raw(j, ",\"schema_len\":"); js_u32(j, (uint32_t)strlen(t.params_schema));
+        js_ch(j, '}');
+    }
+    js_raw(j, "],\"config\":[");
+    for (i = 0; i < nparam; i++) {
+        pm_metal_ai_config_param_t c;
+        if (pm_metal_ai_config_param_nth(i, &c) != 0) continue;
+        if (i != 0) js_ch(j, ',');
+        js_raw(j, "{\"key\":"); js_str(j, c.key);
+        js_raw(j, ",\"value\":"); js_str(j, c.value);
+        js_ch(j, '}');
+    }
+    js_raw(j, "],\"mcp\":[");
+    for (i = 0; i < nserver; i++) {
+        pm_metal_ai_mcp_server_t m;
+        if (pm_metal_ai_mcp_server_nth(i, &m) != 0) continue;
+        if (i != 0) js_ch(j, ',');
+        js_raw(j, "{\"name\":"); js_str(j, m.name);
+        js_raw(j, ",\"transport\":"); js_u32(j, (uint32_t)m.transport);
+        js_raw(j, ",\"command\":"); js_str(j, m.command);
+        js_raw(j, ",\"sse_url\":"); js_str(j, m.sse_url);
+        js_raw(j, ",\"timeout_ms\":"); js_u32(j, m.timeout_ms);
+        js_ch(j, '}');
+    }
+    js_raw(j, "],\"note\":\"live_ai_hub\"}");
+}
+
+/* Browse face (GET /ai/session?id=N or /ai/provider?name=X): one object's full
+ * record. A session answer carries every message it holds (walked by the id
+ * pm_metal_ai_session_t now exposes); a provider answer is its record minus the
+ * api_key bytes (only whether one is set). Not-found answers 404 via `*rc`. */
+static void fill_ai_browse(js_t *j, const char *path, const char *raw, int32_t *rc) {
+    *rc = -1;
+    if (path_is(path, "/ai/session")) {
+        char idb[16];
+        uint32_t id, n = 0, i;
+        pm_metal_ai_session_t s;
+        pm_metal_ai_message_t m;
+        if (qget(raw, "id", idb, sizeof(idb)) == 0) {
+            js_raw(j, "{\"error\":\"bad_id\"}");
+            return;
+        }
+        id = (uint32_t)strtoul(idb, NULL, 10);
+        if (pm_metal_ai_session_find(id, &s) != 0) {
+            js_raw(j, "{\"error\":\"not_found\"}");
+            return;
+        }
+        (void)pm_metal_ai_session_message_count(id, &n);
+        js_raw(j, "{\"schema\":1,\"id\":"); js_u32(j, id);
+        js_raw(j, ",\"name\":"); js_str(j, s.name);
+        js_raw(j, ",\"msg_count\":"); js_u32(j, s.msg_count);
+        js_raw(j, ",\"persistent\":"); js_raw(j, s.persistent ? "true" : "false");
+        js_raw(j, ",\"messages\":[");
+        for (i = 0; i < n; i++) {
+            if (pm_metal_ai_session_message_nth(id, i, &m) != 0) continue;
+            if (i != 0) js_ch(j, ',');
+            js_raw(j, "{\"role\":"); js_u32(j, (uint32_t)m.role);
+            js_raw(j, ",\"content\":"); js_str(j, m.content);
+            js_ch(j, '}');
+        }
+        js_raw(j, "]}");
+        *rc = 0;
+        return;
+    }
+    if (path_is(path, "/ai/provider")) {
+        char name[64];
+        pm_metal_ai_provider_t p;
+        name[0] = 0;
+        qget(raw, "name", name, sizeof(name));
+        if (name[0] == 0 || pm_metal_ai_provider_find(name, &p) != 0) {
+            js_raw(j, "{\"error\":\"not_found\"}");
+            return;
+        }
+        js_raw(j, "{\"schema\":1,\"name\":"); js_str(j, p.name);
+        js_raw(j, ",\"url\":"); js_str(j, p.url);
+        js_raw(j, ",\"model\":"); js_str(j, p.model);
+        js_raw(j, ",\"api_key_set\":"); js_raw(j, p.api_key[0] ? "true" : "false");
+        js_ch(j, '}');
+        *rc = 0;
+        return;
+    }
+    js_raw(j, "{\"error\":\"bad_path\"}");
+}
+
+/* Factory face (POST /ai/<kind>/<op>?<fields>): create / edit / remove the hub
+ * objects. Every op is one direct call into the ai hub's write API (the same
+ * pm_metal_ai_* the in-kernel guests use) and answers ai_reply's {"ok":...}
+ * shape. Fields ride in the query string (qget) — the freestanding libc has no
+ * request-body parser, matching how /inspect/call/ passes its args. */
+static int32_t fill_ai_write(js_t *j, const char *path, const char *raw) {
+    char a[256], b[256], c[256], d[256];
+    int32_t rc;
+    if (path_is(path, "/ai/provider/set")) {
+        pm_metal_ai_provider_t p;
+        memset(&p, 0, sizeof(p));
+        qget(raw, "name", a, sizeof(a)); strncpy(p.name, a, sizeof(p.name) - 1);
+        qget(raw, "url", b, sizeof(b)); strncpy(p.url, b, sizeof(p.url) - 1);
+        qget(raw, "model", c, sizeof(c)); strncpy(p.model, c, sizeof(p.model) - 1);
+        qget(raw, "api_key", d, sizeof(d)); strncpy(p.api_key, d, sizeof(p.api_key) - 1);
+        ai_reply(j, pm_metal_ai_provider_add(&p));
+        return 1;
+    }
+    if (path_is(path, "/ai/provider/remove")) {
+        qget(raw, "name", a, sizeof(a));
+        ai_reply(j, pm_metal_ai_provider_remove(a));
+        return 1;
+    }
+    if (path_is(path, "/ai/session/create")) {
+        uint32_t id = 0;
+        qget(raw, "name", a, sizeof(a));
+        rc = pm_metal_ai_session_create(a, &id);
+        if (rc == 0) {
+            js_raw(j, "{\"ok\":true,\"id\":"); js_u32(j, id); js_ch(j, '}');
+        } else {
+            ai_reply(j, rc);
+        }
+        return 1;
+    }
+    if (path_is(path, "/ai/session/append")) {
+        char content[512];
+        uint32_t id, role;
+        qget(raw, "id", a, sizeof(a)); id = (uint32_t)strtoul(a, NULL, 10);
+        qget(raw, "role", b, sizeof(b)); role = (uint32_t)strtoul(b, NULL, 10);
+        qget(raw, "content", content, sizeof(content));
+        ai_reply(j, pm_metal_ai_session_append(id, (pm_metal_ai_role_t)role,
+            content, (uint32_t)strlen(content)));
+        return 1;
+    }
+    if (path_is(path, "/ai/session/persist")) {
+        uint32_t id, pv;
+        qget(raw, "id", a, sizeof(a)); id = (uint32_t)strtoul(a, NULL, 10);
+        qget(raw, "persistent", b, sizeof(b)); pv = (uint32_t)strtoul(b, NULL, 10);
+        ai_reply(j, pm_metal_ai_session_set_persistent(id, (uint8_t)pv));
+        return 1;
+    }
+    if (path_is(path, "/ai/config/set")) {
+        qget(raw, "key", a, sizeof(a));
+        qget(raw, "value", b, sizeof(b));
+        ai_reply(j, pm_metal_ai_config_param_set(a, b));
+        return 1;
+    }
+    if (path_is(path, "/ai/mcp/start")) {
+        pm_metal_ai_mcp_server_t m;
+        memset(&m, 0, sizeof(m));
+        qget(raw, "name", a, sizeof(a)); strncpy(m.name, a, sizeof(m.name) - 1);
+        qget(raw, "transport", b, sizeof(b));
+        m.transport = (pm_metal_ai_mcp_transport_t)strtoul(b, NULL, 10);
+        qget(raw, "command", c, sizeof(c)); strncpy(m.command, c, sizeof(m.command) - 1);
+        qget(raw, "sse_url", d, sizeof(d)); strncpy(m.sse_url, d, sizeof(m.sse_url) - 1);
+        qget(raw, "timeout_ms", b, sizeof(b));
+        m.timeout_ms = (uint32_t)strtoul(b, NULL, 10);
+        ai_reply(j, pm_metal_ai_mcp_server_start(&m));
+        return 1;
+    }
+    if (path_is(path, "/ai/mcp/stop")) {
+        qget(raw, "name", a, sizeof(a));
+        ai_reply(j, pm_metal_ai_mcp_server_stop(a));
+        return 1;
+    }
+    js_raw(j, "{\"error\":\"bad_path\"}");
+    return 1;
 }
 
 /* Parse `/inspect/reg/<fqn>` or `/inspect/reg/<fqn>/<func>` (or any two/three
@@ -1042,7 +1328,8 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
             && !(strcmp(method, "POST") == 0
                 && (strncmp(path, "/build/", 7) == 0
                     || path_is(path, "/build")
-                    || path_is(path, "/p2p/cloud/test"))))) {
+                    || path_is(path, "/p2p/cloud/test")
+                    || strncmp(path, "/ai/", 4) == 0)))) {
         js_raw(&j, "{\"error\":\"method\"}");
         s_body_len = j.n; return js_ok(&j) ? 405 : -1;
     }
@@ -1052,6 +1339,21 @@ static int32_t fill(const char *method, const char *path, char *out, uint32_t ou
     }
     if (path_is(path, "/capabilities")) {
         fill_caps(&j);
+        s_body_len = j.n; return js_ok(&j) ? 200 : -1;
+    }
+    if (path_is(path, "/ai/state")) {
+        fill_ai(&j);
+        s_body_len = j.n; return js_ok(&j) ? 200 : -1;
+    }
+    /* AI Browse (GET one object) + Factory (POST create/edit/remove) faces. */
+    if (strcmp(method, "GET") == 0
+        && (path_is(path, "/ai/session") || path_is(path, "/ai/provider"))) {
+        int32_t brc = 0;
+        fill_ai_browse(&j, path, raw, &brc);
+        s_body_len = j.n; return js_ok(&j) ? (brc == 0 ? 200 : 404) : -1;
+    }
+    if (strcmp(method, "POST") == 0 && strncmp(path, "/ai/", 4) == 0) {
+        (void)fill_ai_write(&j, path, raw);
         s_body_len = j.n; return js_ok(&j) ? 200 : -1;
     }
     if (path_is(path, "/inspect/self") || path_is(path, "/p2p/self")) {
@@ -3570,6 +3872,7 @@ int32_t pm_metal_inspect_init(pm_util_mem_arena_t *arena) {
     s_status = 0;
     (void)add_route("/health");
     (void)add_route("/capabilities");
+    (void)add_route("/ai/state");
     (void)add_route("/inspect/self");
     (void)add_route("/inspect/reg");
     (void)add_route("/inspect/reg/completeness");

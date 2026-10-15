@@ -119,6 +119,36 @@ st, body = handle("GET", "/capabilities")
 if st != 200 or '"asgi":true' not in body or '"microdot":true' not in body or '"zenoh":true' not in body:
     raise SystemExit("inspect caps %s %s" % (st, body))
 print("upy inspect caps")
+# The AI pane's live read face (/ai/state) — same fill on every seat.
+st, body = handle("GET", "/ai/state")
+if st != 200 or '"note":"live_ai_hub"' not in body:
+    raise SystemExit("ai state %s %s" % (st, body))
+print("upy ai state")
+# AI Factory (write) + Browse (drill-down): create a provider / session, append
+# + browse a message, then remove the provider. Same /ai/… the pane posts.
+st, body = handle("POST", "/ai/provider/set?name=probe&url=u&model=m")
+if st != 200 or '"ok":true' not in body:
+    raise SystemExit("ai provider set %s %s" % (st, body))
+st, body = handle("GET", "/ai/provider?name=probe")
+if st != 200 or '"name":"probe"' not in body:
+    raise SystemExit("ai provider browse %s %s" % (st, body))
+st, body = handle("POST", "/ai/session/create?name=probe")
+if st != 200 or '"ok":true' not in body:
+    raise SystemExit("ai session create %s %s" % (st, body))
+sid = body.split('"id":')[1].split('}')[0]
+st, body = handle("POST", "/ai/session/append?id=%s&role=0&content=hello" % sid)
+if st != 200 or '"ok":true' not in body:
+    raise SystemExit("ai session append %s %s" % (st, body))
+st, body = handle("GET", "/ai/session?id=%s" % sid)
+if st != 200 or 'hello' not in body:
+    raise SystemExit("ai session browse %s %s" % (st, body))
+st, body = handle("POST", "/ai/config/set?key=probe&value=v")
+if st != 200 or '"ok":true' not in body:
+    raise SystemExit("ai config set %s %s" % (st, body))
+st, body = handle("POST", "/ai/provider/remove?name=probe")
+if st != 200 or '"ok":true' not in body:
+    raise SystemExit("ai provider remove %s %s" % (st, body))
+print("upy ai factory+browse")
 import pymergetic.metal.net.dns as dns
 
 if dns.resolve is None:
@@ -153,6 +183,10 @@ if ai.tool_count() != 0:
     raise SystemExit("ai tools empty")
 if ai.tool_unregister("seat-probe-missing") != -1:
     raise SystemExit("ai tool unregister miss")
+# The HTTP face test earlier (POST /ai/config/set?key=probe&value=v) persists
+# its param in the same store the Python face reads below. Clear it so the
+# roundtrip starts from an empty table (count 1 after set, 0 after delete).
+ai_config.param_delete("probe")
 if ai_config.param_set("seat-ai-probe", "1") != 0:
     raise SystemExit("ai config param set")
 if ai_config.param_count() != 1:
@@ -167,10 +201,11 @@ if ai_provider.count() != 0:
     raise SystemExit("ai providers empty")
 if ai_provider.remove("seat-probe-missing") != -1:
     raise SystemExit("ai provider remove miss")
+_sbase = ai_session.count()
 _sid = ai_session.create("seat-ai-probe")
-if _sid[0] != 0 or ai_session.count() != 1:
+if _sid[0] != 0 or ai_session.count() != _sbase + 1:
     raise SystemExit("ai session create")
-if ai_session.close(_sid[1]) != 0 or ai_session.count() != 0:
+if ai_session.close(_sid[1]) != 0 or ai_session.count() != _sbase:
     raise SystemExit("ai session close")
 if ai_mcp.server_count() != 0:
     raise SystemExit("ai mcp servers empty")

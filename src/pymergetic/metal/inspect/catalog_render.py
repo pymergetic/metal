@@ -307,6 +307,7 @@ def _tree_of(fqns):
 _SEAT_PAGES = (
     ("reg", "Registry"),
     ("factory", "Factory"),
+    ("ai", "AI"),
     ("p2p", "P2P"),
     ("services", "Services"),
 )
@@ -346,6 +347,7 @@ def shell_ctx(catalog, *, title, active_package="", body_html="", nav_html_overr
             "page-docs" if nav_active == "docs"
             else "page-reg" if nav_active == "reg"
             else "page-factory" if nav_active == "factory"
+            else "page-ai" if nav_active == "ai"
             else "page-p2p" if nav_active == "p2p"
             else "page-services" if nav_active == "services"
             else ""
@@ -514,6 +516,13 @@ def render_factory(registry, *, engine, template_dir="www"):
     return _seat_page(registry, engine=engine, template="factory.html",
                       title="factory — pymergetic.metal", nav_active="factory",
                       script="factory.js")
+
+
+def render_ai(registry, *, engine, template_dir="www"):
+    """Render the AI hub panel (ai.html in shell.html)."""
+    return _seat_page(registry, engine=engine, template="ai.html",
+                      title="AI — pymergetic.metal", nav_active="ai",
+                      script="ai.js")
 
 
 def render_p2p(registry, *, engine, template_dir="www"):
