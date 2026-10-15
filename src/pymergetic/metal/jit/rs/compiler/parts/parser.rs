@@ -218,6 +218,19 @@ impl Kids {
         self.n += 1;
     }
 
+    /* Indexed read (for splices that walk a finished list). */
+    unsafe fn get(&self, i: usize) -> *mut pm_jit_rsx_ast_t {
+        if i < self.n {
+            if i < KIDS_INLINE {
+                self.fixed[i]
+            } else {
+                unsafe { *self.spill.add(i - KIDS_INLINE) }
+            }
+        } else {
+            core::ptr::null_mut()
+        }
+    }
+
     /* Build the packed slab for set_kids (arena, exact size). Element count
      * stays in `self.n` — this subset has no tuple returns. */
     unsafe fn pack(&self, arena: *mut pm_util_mem_arena_t) -> *mut *mut pm_jit_rsx_ast_t {
@@ -422,6 +435,13 @@ struct Parser {
      * list, NULL = none): `#[cfg(feature = "x")]` items strip unless
      * "x" is listed. `test` is never active. */
     feats: *const u8,
+    /* Nested fn/static items found in fn bodies, hoisted to file scope
+     * (a Rust nested item captures nothing — it is a file-scope item with
+     * scoped visibility, and the subset's one flat namespace per card is
+     * exactly that). parse_stmt collects here; parse_file splices these
+     * after the file's own items (the lower's item passes then see them
+     * unchanged — prototypes, bodies, statics). */
+    hoist: Kids,
 }
 
 impl Parser {
@@ -1815,11 +1835,14 @@ impl Parser {
 
     unsafe fn parse_cast_expr(&mut self) -> *mut pm_jit_rsx_ast_t {
         let line = unsafe { self.line(self.at) };
-        let lhs = unsafe { self.parse_unary_expr() };
+        let mut lhs = unsafe { self.parse_unary_expr() };
         if !self.ok || lhs.is_null() {
             return lhs;
         }
-        if unsafe { self.is_kw(self.at, b"as\0".as_ptr()) } {
+        /* `as` chains are left-associative: `x as T as U` is
+         * `((x as T) as U)` — the walk convention's `p as *mut u32 as
+         * *mut c_void` spelling needs the chain, not one hop. */
+        while unsafe { self.is_kw(self.at, b"as\0".as_ptr()) } {
             self.at += 1;
             let ty = unsafe { self.parse_type() };
             let mut kids = Kids::new();
@@ -1831,7 +1854,7 @@ impl Parser {
             unsafe {
                 self.set_kids(n, &kids);
             }
-            return n;
+            lhs = n;
         }
         lhs
     }
@@ -3703,17 +3726,70 @@ impl Parser {
             self.at += 1;
             return unsafe { self.mk(pm_jit_rsx_ast_kind::STMT, line, b"empty\0".as_ptr(), 5) };
         }
-        /* Nested items in bodies refuse (one flat namespace per card). */
+        /* Nested items in bodies: a Rust nested item captures nothing — it
+         * is a file-scope item with scoped visibility, and the subset's one
+         * flat namespace per card is exactly that shape. fn/static/const
+         * parse as real items and hoist to file scope (the item passes then
+         * lower them unchanged); a nested `use` is scope bookkeeping the
+         * build face resolves at splice time — consumed as a no-op node so
+         * the module-local convention (`use core::sync::atomic::..` inside
+         * a test helper) parses. Nested struct/enum/impl/trait/mod/type
+         * still refuse: those change item scope in ways the flat namespace
+         * does not model. */
         if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::IDENT {
-            let is_item_kw = unsafe { self.is_kw(self.at, b"fn\0".as_ptr()) }
-                || unsafe { self.is_kw(self.at, b"struct\0".as_ptr()) }
+            /* `unsafe`/`extern` only open an item here when the NEXT token
+             * says so (`unsafe fn`, `unsafe extern`, `extern "C" fn`,
+             * `extern {`): `unsafe { .. }` as a whole statement must fall
+             * to the ctrl-stmt path below, never parse_item (which would
+             * read it as `unsafe fn`). */
+            let is_unsafe_item = unsafe { self.is_kw(self.at, b"unsafe\0".as_ptr()) }
+                && (unsafe { self.is_kw(self.at + 1, b"fn\0".as_ptr()) }
+                    || unsafe { self.is_kw(self.at + 1, b"extern\0".as_ptr()) }
+                    || unsafe { self.is_kw(self.at + 1, b"const\0".as_ptr()) }
+                    || unsafe { self.is_kw(self.at + 1, b"static\0".as_ptr()) });
+            let is_extern_item = unsafe { self.is_kw(self.at, b"extern\0".as_ptr()) }
+                && (unsafe { self.is_kw(self.at + 1, b"fn\0".as_ptr()) }
+                    || unsafe { self.kind(self.at + 1) } == pm_jit_rsx_tok_kind::STRING_LITERAL
+                    || (unsafe { self.is_punct(self.at + 1, b'{') }));
+            /* `const NAME: T = ..` is a scoped value binding (the shared
+             * let tail above took it); `const fn ..` is a nested fn item. */
+            let is_const_fn_item = unsafe { self.is_kw(self.at, b"const\0".as_ptr()) }
+                && unsafe { self.is_kw(self.at + 1, b"fn\0".as_ptr()) };
+            if unsafe { self.is_kw(self.at, b"fn\0".as_ptr()) }
+                || unsafe { self.is_kw(self.at, b"static\0".as_ptr()) }
+                || unsafe { self.is_kw(self.at, b"pub\0".as_ptr()) }
+                || is_unsafe_item
+                || is_extern_item
+                || is_const_fn_item
+            {
+                let item = unsafe { self.parse_item() };
+                if item.is_null() || !self.ok {
+                    return core::ptr::null_mut();
+                }
+                /* the whole item is hoisted — the body keeps nothing */
+                unsafe {
+                    self.hoist.add(item, self.arena);
+                }
+                return unsafe {
+                    self.mk(pm_jit_rsx_ast_kind::STMT, line, b"hoisted\0".as_ptr(), 7)
+                };
+            }
+            if unsafe { self.is_kw(self.at, b"use\0".as_ptr()) } {
+                /* scope-local import: tokens through `;` consume, lower no-op */
+                let item = unsafe { self.parse_use() };
+                if !self.ok {
+                    return core::ptr::null_mut();
+                }
+                let _ = item;
+                return unsafe {
+                    self.mk(pm_jit_rsx_ast_kind::STMT, line, b"usehold\0".as_ptr(), 7)
+                };
+            }
+            let is_item_kw = unsafe { self.is_kw(self.at, b"struct\0".as_ptr()) }
                 || unsafe { self.is_kw(self.at, b"enum\0".as_ptr()) }
                 || unsafe { self.is_kw(self.at, b"impl\0".as_ptr()) }
                 || unsafe { self.is_kw(self.at, b"trait\0".as_ptr()) }
                 || unsafe { self.is_kw(self.at, b"mod\0".as_ptr()) }
-                || unsafe { self.is_kw(self.at, b"use\0".as_ptr()) }
-                || unsafe { self.is_kw(self.at, b"static\0".as_ptr()) }
-                || unsafe { self.is_kw(self.at, b"const\0".as_ptr()) }
                 || unsafe { self.is_kw(self.at, b"type\0".as_ptr()) };
             if is_item_kw {
                 unsafe {
@@ -5655,13 +5731,24 @@ impl Parser {
             loop {
                 if unsafe { self.kind(look) } == pm_jit_rsx_tok_kind::MACRO_INVOC {
                     let line = unsafe { self.line(self.at) };
+                    /* keep the whole invocation text (NAME!(...) — the
+                     * same contract the expr paths use): the lowering
+                     * dispatches the item macros (PM_MOD_TEST_RS! and
+                     * friends) BY NAME, and an empty-text MACRO node was
+                     * a silent dark drop. */
+                    let m = unsafe {
+                        self.mk(
+                            pm_jit_rsx_ast_kind::MACRO,
+                            line,
+                            self.text(look),
+                            self.text_len(look),
+                        )
+                    };
                     self.at = look + 1;
                     if unsafe { self.is_punct(self.at, b';') } {
                         self.at += 1;
                     }
-                    return unsafe {
-                        self.mk(pm_jit_rsx_ast_kind::MACRO, line, b"\0".as_ptr(), 0)
-                    };
+                    return m;
                 }
                 if unsafe { self.kind(look) } == pm_jit_rsx_tok_kind::IDENT
                     && unsafe { self.kind(look + 1) } == pm_jit_rsx_tok_kind::DOUBLE_COLON
@@ -5672,25 +5759,44 @@ impl Parser {
                 break;
             }
         }
-        /* Item-level macro invocation (e.g. PM_MOD_EXPORT_RS! ctors). */
+        /* Item-level macro invocation (e.g. PM_MOD_EXPORT_RS! ctors).
+         * The invocation text rides the node (dispatch is by name). */
         if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::IDENT
             && unsafe { self.kind(self.at + 1) } == pm_jit_rsx_tok_kind::MACRO_INVOC
         {
+            let line = unsafe { self.line(self.at) };
+            let m = unsafe {
+                self.mk(
+                    pm_jit_rsx_ast_kind::MACRO,
+                    line,
+                    self.text(self.at + 1),
+                    self.text_len(self.at + 1),
+                )
+            };
             self.at += 2;
             if unsafe { self.is_punct(self.at, b';') } {
                 self.at += 1;
             }
-            return unsafe { self.mk(pm_jit_rsx_ast_kind::MACRO, self.line(self.at), b"\0".as_ptr(), 0) };
+            return m;
         }
         if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::MACRO_INVOC {
             /* paths like `pymergetic_wasmmod::PM_MOD_EXPORT_RS!(...)` lex as
-             * ident :: MACRO_INVOC — handle the DOUBLE_COLON form here. */
+             * ident :: MACRO_INVOC — handle the DOUBLE_COLON form here.
+             * Invocation text rides the node (dispatch is by name). */
             let line = unsafe { self.line(self.at) };
+            let m = unsafe {
+                self.mk(
+                    pm_jit_rsx_ast_kind::MACRO,
+                    line,
+                    self.text(self.at),
+                    self.text_len(self.at),
+                )
+            };
             self.at += 1;
             if unsafe { self.is_punct(self.at, b';') } {
                 self.at += 1;
             }
-            return unsafe { self.mk(pm_jit_rsx_ast_kind::MACRO, line, b"\0".as_ptr(), 0) };
+            return m;
         }
         if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::DOUBLE_COLON {
             /* leading `::` path macro: `::core::…` or `::crate::…` */
@@ -5871,6 +5977,47 @@ impl Parser {
             }
             unsafe {
                 kids.add(item, self.arena);
+            }
+        }
+        /* Splice hoisted nested items (fn/static/const from fn bodies) after
+         * the file's own items — Rust nested items capture nothing, so file
+         * scope is exact. Flat-namespace honesty: a hoisted name that
+         * collides with a file item's name (or an earlier hoist) refuses —
+         * C would silently pick one definition; the subset never does. */
+        {
+            let mut h = 0usize;
+            while h < self.hoist.n {
+                let hi = unsafe { self.hoist.get(h) };
+                let hk = unsafe { (*hi).kind };
+                if hk == pm_jit_rsx_ast_kind::FN || hk == pm_jit_rsx_ast_kind::STATIC {
+                    let hn = unsafe { (*hi).text };
+                    let hnl = unsafe { (*hi).text_len };
+                    let mut c = 0usize;
+                    let mut collides = false;
+                    while c < kids.n {
+                        let ci = unsafe { kids.get(c) };
+                        let ck = unsafe { (*ci).kind };
+                        if (ck == pm_jit_rsx_ast_kind::FN || ck == pm_jit_rsx_ast_kind::STATIC)
+                            && unsafe { (*ci).text_len } == hnl
+                            && !hn.is_null()
+                            && unsafe { z_eq((*ci).text, hnl, hn) }
+                        {
+                            collides = true;
+                            break;
+                        }
+                        c += 1;
+                    }
+                    if collides {
+                        unsafe {
+                            self.err(b"nested item name collides with an earlier item\0".as_ptr());
+                        }
+                        return core::ptr::null_mut();
+                    }
+                }
+                unsafe {
+                    kids.add(hi, self.arena);
+                }
+                h += 1;
             }
         }
         let n = unsafe { self.mk(pm_jit_rsx_ast_kind::FILE, line, b"file\0".as_ptr(), 4) };

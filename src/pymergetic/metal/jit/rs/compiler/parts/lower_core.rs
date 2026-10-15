@@ -751,6 +751,7 @@ impl Lower {
             chain_ctx: false,
             shr_closes: 0,
             feats: core::ptr::null(),
+            hoist: Kids::new(),
         };
         /* element expression first */
         let elem = unsafe { p.parse_expr() };
@@ -993,6 +994,7 @@ impl Lower {
             chain_ctx: false,
             shr_closes: 0,
             feats: core::ptr::null(),
+            hoist: Kids::new(),
         };
         if unsafe { p.kind(p.at) } != pm_jit_rsx_tok_kind::STRING_LITERAL {
             unsafe {
@@ -1116,6 +1118,7 @@ impl Lower {
                 chain_ctx: false,
                 shr_closes: 0,
                 feats: core::ptr::null(),
+                hoist: Kids::new(),
             };
             let cap = unsafe { ip2.parse_expr() };
             if !ip2.ok || cap.is_null() {
@@ -1265,6 +1268,7 @@ impl Lower {
             chain_ctx: false,
             shr_closes: 0,
             feats: core::ptr::null(),
+            hoist: Kids::new(),
         };
         /* arg 0: the sink */
         let sink = unsafe { p.parse_expr() };
@@ -1390,6 +1394,7 @@ impl Lower {
                 chain_ctx: false,
                 shr_closes: 0,
                 feats: core::ptr::null(),
+                hoist: Kids::new(),
             };
             let cap = unsafe { ip2.parse_expr() };
             if !ip2.ok || cap.is_null() {
@@ -1506,6 +1511,169 @@ impl Lower {
         0
     }
 
+    /* PM_MOD_TEST_RS!( / PM_MOD_BENCH_RS!( — the module test/bench
+     * registration faces at their kernel fill. These are the RUST twins
+     * of guest.h's PM_MOD_TEST_C / PM_MOD_BENCH_C, whose guest branch
+     * (the branch every kernel seat compiles) is a keep-ref: the packer
+     * scans the macro call site, and the guest TU only keeps the case fn
+     * referenced. 1 = test, 2 = bench, 0 = not a registration macro. */
+    unsafe fn modtest_macro_kind(&self, text: *const u8, text_len: usize) -> usize {
+        if text.is_null() {
+            return 0;
+        }
+        let mut sp = text;
+        let mut sl = text_len;
+        /* optional leading `::` / `crate::` (the faces spell the call
+         * `crate::PM_MOD_TEST_RS!`; the MACRO token text usually starts
+         * at the name, but strip a leading path like assert does) */
+        while sl >= 2 && unsafe { *sp } == b':' && unsafe { *sp.add(1) } == b':' {
+            sp = unsafe { sp.add(2) };
+            sl -= 2;
+        }
+        loop {
+            if sl >= 6 && unsafe { z_eq(sp, 6, b"crate::\0".as_ptr()) } {
+                sp = unsafe { sp.add(6) };
+                sl -= 6;
+            } else if sl >= 5 && unsafe { z_eq(sp, 5, b"std::\0".as_ptr()) } {
+                sp = unsafe { sp.add(5) };
+                sl -= 5;
+            } else if sl >= 6 && unsafe { z_eq(sp, 6, b"core::\0".as_ptr()) } {
+                sp = unsafe { sp.add(6) };
+                sl -= 6;
+            } else {
+                break;
+            }
+        }
+        if sl >= 16 && unsafe { z_eq(sp, 16, b"PM_MOD_TEST_RS!(\0".as_ptr()) } {
+            return 1;
+        }
+        if sl >= 17 && unsafe { z_eq(sp, 17, b"PM_MOD_BENCH_RS!(\0".as_ptr()) } {
+            return 2;
+        }
+        0
+    }
+
+    /* The registered fn ident — the third argument of
+     * PM_MOD_TEST_RS!("fqn", "name", IDENT) / PM_MOD_BENCH_RS!(same).
+     * Sub-lexed with the real lexer (the same posture as
+     * assert_macro_scan — never a hand-rolled text scan); the rigid arg
+     * shape is two string literals and one ident. Returns the ident's
+     * byte length (0 = form refused, message armed). */
+    unsafe fn modtest_macro_fn_name(
+        &mut self,
+        text: *const u8,
+        tlen: usize,
+        out: *mut u8,
+        cap: usize,
+    ) -> usize {
+        let mut sp = text;
+        let mut sl = tlen;
+        /* strip path + name + `!(` — same walk as modtest_macro_kind */
+        while sl >= 2 && unsafe { *sp } == b':' && unsafe { *sp.add(1) } == b':' {
+            sp = unsafe { sp.add(2) };
+            sl -= 2;
+        }
+        loop {
+            if sl >= 6 && unsafe { z_eq(sp, 6, b"crate::\0".as_ptr()) } {
+                sp = unsafe { sp.add(6) };
+                sl -= 6;
+            } else if sl >= 5 && unsafe { z_eq(sp, 5, b"std::\0".as_ptr()) } {
+                sp = unsafe { sp.add(5) };
+                sl -= 5;
+            } else if sl >= 6 && unsafe { z_eq(sp, 6, b"core::\0".as_ptr()) } {
+                sp = unsafe { sp.add(6) };
+                sl -= 6;
+            } else {
+                break;
+            }
+        }
+        let head = unsafe { self.modtest_macro_kind(sp, sl) };
+        let hlen: usize = if head == 1 { 16 } else { 17 };
+        if head == 0 || sl < hlen + 2 || unsafe { *sp.add(sl - 1) } != b')' {
+            unsafe {
+                self.err(b"unsupported: registration macro form\0".as_ptr(), 0);
+            }
+            return 0;
+        }
+        /* body: [sp+hlen, sl-1) — the invocation's last byte is `)` */
+        let body = unsafe { sp.add(hlen) };
+        let blen = sl - hlen - 1;
+        let mut toks: pm_jit_rsx_toklist_t = pm_jit_rsx_toklist_t {
+            toks: core::ptr::null_mut(),
+            n_toks: 0,
+        };
+        if unsafe {
+            pm_metal_jit_rsx_lex(
+                self.arena,
+                body,
+                blen,
+                &mut toks,
+                self.errbuf,
+                self.errcap,
+            )
+        } != 0
+        {
+            return 0;
+        }
+        /* walk: STRING_LITERAL , STRING_LITERAL , IDENT */
+        let mut i: u32 = 0;
+        let mut slot = 0usize;
+        let mut name: *const u8 = core::ptr::null();
+        let mut name_len: usize = 0;
+        while i < toks.n_toks {
+            let t = unsafe { toks.toks.add(i as usize) };
+            let k = unsafe { (*t).kind };
+            if k == pm_jit_rsx_tok_kind::END {
+                break;
+            }
+            if k == pm_jit_rsx_tok_kind::PUNCT && unsafe { z_eq((*t).text, (*t).text_len, b",\0".as_ptr()) } {
+                i += 1;
+                continue;
+            }
+            if slot < 2 {
+                if k != pm_jit_rsx_tok_kind::STRING_LITERAL {
+                    unsafe {
+                        self.err(b"unsupported: registration macro form\0".as_ptr(), 0);
+                    }
+                    return 0;
+                }
+            } else if slot == 2 {
+                if k != pm_jit_rsx_tok_kind::IDENT {
+                    unsafe {
+                        self.err(b"unsupported: registration macro form\0".as_ptr(), 0);
+                    }
+                    return 0;
+                }
+                name = unsafe { (*t).text };
+                name_len = unsafe { (*t).text_len };
+            } else {
+                unsafe {
+                    self.err(b"unsupported: registration macro trailing tokens\0".as_ptr(), 0);
+                }
+                return 0;
+            }
+            slot += 1;
+            i += 1;
+        }
+        if slot != 3 || name.is_null() || name_len == 0 || name_len >= cap {
+            unsafe {
+                self.err(b"unsupported: registration macro form\0".as_ptr(), 0);
+            }
+            return 0;
+        }
+        let mut w = 0usize;
+        while w < name_len {
+            unsafe {
+                *out.add(w) = *name.add(w);
+            }
+            w += 1;
+        }
+        unsafe {
+            *out.add(w) = 0;
+        }
+        w
+    }
+
     /* Sub-lex and sub-parse the assert invocation's argument list with
      * the full expression grammar (same machinery as
      * format_macro_scan_named — never a hand-rolled scan of the argument
@@ -1597,6 +1765,7 @@ impl Lower {
             chain_ctx: false,
             shr_closes: 0,
             feats: core::ptr::null(),
+            hoist: Kids::new(),
         };
         let mut got: [*mut pm_jit_rsx_ast_t; 3] = [core::ptr::null_mut(); 3];
         let mut n = 0usize;

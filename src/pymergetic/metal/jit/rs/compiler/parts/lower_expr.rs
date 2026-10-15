@@ -2245,6 +2245,70 @@ impl Lower {
             self.out.putc(b')');
             return;
         }
+        /* Test-harness kernel fills (util.mod_test's faces):
+         *   case(|| BODY)      -> ((void)(BODY), 0)     run + pass
+         *   case_rc(NAME)      -> (NAME())               call + own rc
+         *   case_rc(|| BODY)   -> ((void)(BODY), 0)     same as case
+         * The host harness's `case` (catch_unwind + TEST_LOCK) has no
+         * kernel symbol — the kernel's own registry runner is the
+         * serializer, and the subset's asserts abort on failure, so the
+         * run-then-pass fill is exactly the kernel meaning. Only the
+         * rigid shapes fill; anything else refuses (never a silent
+         * wrong-call). Both are single-segment `case` / `case_rc` paths. */
+        {
+            let cn = unsafe { (*callee).n_kids } as usize;
+            if cn == 1 {
+                let cleaf = unsafe { *(*callee).kids.add(0) };
+                let ct = unsafe { (*cleaf).text };
+                let ctl = unsafe { (*cleaf).text_len };
+                let an3 = unsafe { (*args).n_kids } as usize;
+                let is_case = unsafe { z_eq(ct, ctl, b"case\0".as_ptr()) };
+                let is_case_rc = unsafe { z_eq(ct, ctl, b"case_rc\0".as_ptr()) };
+                if (is_case || is_case_rc) && an3 == 1 {
+                    let a0 = unsafe { *(*args).kids.add(0) };
+                    let a0k = unsafe { (*a0).kind };
+                    if a0k == pm_jit_rsx_ast_kind::CLOSURE {
+                        /* closure: PARAM* + body (the last kid) */
+                        let ck3 = unsafe { (*a0).kids };
+                        let ckn = unsafe { (*a0).n_kids } as usize;
+                        let mut params_ok = true;
+                        let mut pi = 0usize;
+                        while pi + 1 < ckn {
+                            if unsafe { (*(*ck3.add(pi))).kind } != pm_jit_rsx_ast_kind::PARAM {
+                                params_ok = false;
+                                break;
+                            }
+                            pi += 1;
+                        }
+                        if !params_ok || ckn < 1 {
+                            unsafe {
+                                self.err(b"unsupported: harness closure params\0".as_ptr(), (*e).line);
+                            }
+                            return;
+                        }
+                        let body = unsafe { *ck3.add(ckn - 1) };
+                        self.out.puts(b"((void)(\0".as_ptr());
+                        unsafe { self.emit_expr(body, locals) };
+                        self.out.puts(b"), 0)\0".as_ptr());
+                        return;
+                    }
+                    if is_case_rc && a0k == pm_jit_rsx_ast_kind::PATH {
+                        /* closure-free form: the trampoline is called
+                         * directly and returns its own rc */
+                        self.out.putc(b'(');
+                        unsafe { self.emit_expr(a0, locals) };
+                        self.out.puts(b"())\0".as_ptr());
+                        return;
+                    }
+                    if is_case || is_case_rc {
+                        unsafe {
+                            self.err(b"unsupported: harness closure form\0".as_ptr(), (*e).line);
+                        }
+                        return;
+                    }
+                }
+            }
+        }
         /* Newtype constructor `Mut(x)` / transparent `UnsafeCell::new(x)`:
          * the C value is the argument itself. Registered newtypes take the
          * bare leaf; UnsafeCell/Cell::new unwraps unconditionally (they

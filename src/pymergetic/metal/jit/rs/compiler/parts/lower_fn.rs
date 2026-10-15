@@ -3067,6 +3067,10 @@ impl Lower {
                 if !initn.is_null() && unsafe { self.init_names_fn(initn) } {
                     unsafe { self.lower_static(item, 0) };
                 }
+            } else if unsafe { (*item).kind } == pm_jit_rsx_ast_kind::MACRO {
+                /* registration macros lower in this pass so their
+                 * keep-refs land after the fn prototypes */
+                unsafe { self.emit_item_macro(item) };
             }
             if !self.ok {
                 bad = true;
@@ -3079,6 +3083,54 @@ impl Lower {
             return false;
         }
         true
+    }
+
+    /* File-scope MACRO item — the registration faces at their kernel
+     * fill. PM_MOD_TEST_RS! / PM_MOD_BENCH_RS! are the RUST twins of
+     * guest.h's PM_MOD_TEST_C / PM_MOD_BENCH_C, whose guest branch is a
+     * keep-ref (the packer scans the macro call site; the guest TU just
+     * keeps the case fn referenced). The keep-ref lands in pass E (after
+     * every prototype), the same window an fn-named static needs. Any
+     * other named macro is a host-side ctor the kernel fill has no use
+     * for — its drop is VISIBLE (a comment), never silent: the
+     * registration macros themselves must never drop dark. */
+    unsafe fn emit_item_macro(&mut self, item: *const pm_jit_rsx_ast_t) {
+        let t = unsafe { (*item).text };
+        let tl = unsafe { (*item).text_len };
+        if tl == 0 {
+            /* legacy empty-text node: nothing to dispatch — visible */
+            self.out.puts(b"/* item macro: no invocation text (skipped) */\n\0".as_ptr());
+            return;
+        }
+        let kind = unsafe { self.modtest_macro_kind(t, tl) };
+        if kind == 0 {
+            self.out.puts(b"/* item macro skipped */\n\0".as_ptr());
+            return;
+        }
+        let mut name_buf = self.arena_tmp();
+        let nlen = unsafe { self.modtest_macro_fn_name(t, tl, name_buf, 96) };
+        if nlen == 0 {
+            return;
+        }
+        /* the same fill as guest.h's disabled branch: a const fn-ptr
+         * keep. Test cases are `i32(void)`; benches `i32(u64)` — both
+         * carry the unused attribute so a skipped face stays quiet. */
+        self.out.puts(b"/* module \0".as_ptr());
+        if kind == 1 {
+            self.out.puts(b"test registration: keep the case alive */\n\0".as_ptr());
+            self.out.puts(b"static int32_t (*const pm_mod_test_keep_\0".as_ptr());
+        } else {
+            self.out.puts(b"bench registration: keep the bench alive */\n\0".as_ptr());
+            self.out.puts(b"static int32_t (*const pm_mod_bench_keep_\0".as_ptr());
+        }
+        self.out.put(name_buf, nlen);
+        if kind == 1 {
+            self.out.puts(b")(void) __attribute__((unused)) = \0".as_ptr());
+        } else {
+            self.out.puts(b")(uint64_t) __attribute__((unused)) = \0".as_ptr());
+        }
+        self.out.put(name_buf, nlen);
+        self.out.puts(b";\n\0".as_ptr());
     }
 
     /* Preamble-time include scan: walks the whole unit tree arming the
