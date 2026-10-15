@@ -14,14 +14,35 @@ const SYM_CAP: usize = 512;
  * support's six state fields); the cap must carry the compiler's own
  * shape or the self-host prove fails field inference past slot 40. */
 /* max fields per struct — Lower itself is the ceiling case (self-host
- * proves the cap every compile: 97 fields as of the Default plane), so
+ * proves the cap every compile: 138 fields as of the closure plane), so
  * the cap must clear the compiler's own shape with headroom to spare. */
-const FPC: usize = 128;
+const FPC: usize = 192;
 /* params per fn whose C types the FnTab records (for `None` args). */
 const FN_MAXP: usize = 8;
 
 /* Transparent newtype registry cap (single-field generic tuple structs). */
 const NT_CAP: usize = 16;
+/* Generic struct defs (`Pair<T> { .. }`) and their instantiated rows
+ * (rsx_gp_<row>): one def per generic struct item, one row per concrete
+ * arg set. The args' C spellings live flattened in GEN_ARGSZ bytes
+ * (GEN_MAXP slots of 64). */
+const GEN_DEF_CAP: usize = 16;
+const GEN_ROW_CAP: usize = 24;
+const GEN_MAXP: usize = 4;
+const GEN_ARGSZ: usize = 256;
+const GEN_SUBSZ: usize = 96;
+/* macro_rules! definitions (textual substitution into expressions):
+ * one matcher's params per def, fixed arity. */
+const MAC_CAP: usize = 8;
+const MAC_PARAMS: usize = 4;
+/* Closures-as-values plane: synthesized static C fns (`rsx_clo_<n>`) per
+ * fn-body batch. One slot per capture-less closure used as a value in one
+ * body (the batch drains — and the cap frees — per fn). 32: a body that
+ * mints more closures than that is writing an event table, not a
+ * function; the refusal is honest. */
+const CLO_CAP: usize = 32;
+/* Params per synthesized closure fn (a plain C parameter list). */
+const CLO_MAXP: usize = 6;
 const OPT_CAP: usize = 24;
 const ST_CAP: usize = 64;
 /* Tuple signature cap: distinct (A, B, ..) spellings per unit. Tuples
@@ -198,6 +219,53 @@ impl SymTab {
             i += 1;
         }
         0
+    }
+
+    /* Registered field count — the arity a positional destructure
+     * (`let P(a, b) = ..`) must match exactly. */
+    unsafe fn count(&self, s: usize) -> usize {
+        if s >= SYM_CAP {
+            return 0;
+        }
+        self.field_counts[s] as usize
+    }
+
+    /* Field at DECLARATION index: the name via out-params (an arena
+     * span, NUL-terminated), the C type into out. Returns the type
+     * length; 0 = index out of range or the type does not fit. */
+    unsafe fn field_by_index(
+        &self,
+        s: usize,
+        idx: usize,
+        name_out: *mut *const u8,
+        name_len_out: *mut usize,
+        out: *mut u8,
+        cap: usize,
+    ) -> usize {
+        if s >= SYM_CAP || idx >= self.field_counts[s] as usize {
+            return 0;
+        }
+        let d = s * FPC + idx;
+        let cl = self.field_ctype_lens[d];
+        if cl == 0 || cl >= cap {
+            return 0;
+        }
+        unsafe {
+            *name_out = self.field_names[d];
+            *name_len_out = self.field_name_lens[d];
+        }
+        let src = self.field_ctypes[d];
+        let mut j = 0usize;
+        while j < cl {
+            unsafe {
+                *out.add(j) = *src.add(j);
+            }
+            j += 1;
+        }
+        unsafe {
+            *out.add(cl) = 0;
+        }
+        cl
     }
 }
 

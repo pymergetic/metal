@@ -1102,6 +1102,385 @@ impl Lower {
         }
     }
 
+    /* Unwrap the PATH "path" wrapper parse_path_expr puts around a plain
+     * name pattern — the leaf PATH node (text = name) is what the bind
+     * decls and lookups consume. Non-wrappers pass through. */
+    unsafe fn bind_leaf(&mut self, b: *const pm_jit_rsx_ast_t) -> *const pm_jit_rsx_ast_t {
+        if unsafe { (*b).kind } == pm_jit_rsx_ast_kind::PATH
+            && unsafe { z_eq((*b).text, (*b).text_len, b"path\0".as_ptr()) }
+            && unsafe { (*b).n_kids } as usize == 1
+        {
+            return unsafe { *(*b).kids.add(0) };
+        }
+        b
+    }
+
+    /* Declare one destructuring bind from the temp: `T x = tmp.<access>;`
+     * with access = the field name (pstruct) or the field name found by
+     * declaration index (ctor). `_` drops the bind; any nested pattern
+     * (tuple, ctor, literal) refuses — only plain names bind here. */
+    unsafe fn destr_bind(
+        &mut self,
+        bind: *const pm_jit_rsx_ast_t,
+        fct: *const u8,
+        fct_len: usize,
+        fname: *const u8,
+        fname_len: usize,
+        tmp: *const u8,
+        tmp_len: usize,
+        line: u32,
+        locals: *mut LocalTab,
+    ) {
+        let leaf = unsafe { self.bind_leaf(bind) };
+        if unsafe { (*leaf).kind } != pm_jit_rsx_ast_kind::PATH {
+            unsafe {
+                self.err(b"unsupported: nested pattern bind in destructuring\0".as_ptr(), line);
+            }
+            return;
+        }
+        let bn = unsafe { (*leaf).text };
+        let bl = unsafe { (*leaf).text_len };
+        /* `_` drops the bind */
+        if bl == 1 && unsafe { z_eq(bn, 1, b"_\0".as_ptr()) } {
+            return;
+        }
+        self.indent();
+        self.out.put(fct, fct_len);
+        self.out.putc(b' ');
+        self.out.put(bn, bl);
+        self.out.puts(b" = \0".as_ptr());
+        self.out.put(tmp, tmp_len);
+        self.out.putc(b'.');
+        self.out.put(fname, fname_len);
+        self.out.puts(b";\n\0".as_ptr());
+        unsafe {
+            (*locals).add(bn, bl, fct, fct_len, self.depth);
+        }
+    }
+
+    /* Option literal initializer — `let o: Option<u8> = None;` /
+     * `= Some(v)`. A bare `None` PATH and call-shaped `Some(v)` carry no
+     * type of their own, so the let's own C type drives the render (the
+     * assignment twin in lower_expr does the same from the lhs type):
+     * struct-Option is the tagged pair's compound literal, a pointer
+     * Option is NULL / the value. Anything else falls to emit_expr. */
+    unsafe fn emit_opt_init(
+        &mut self,
+        init: *const pm_jit_rsx_ast_t,
+        ct: *const u8,
+        ct_len: usize,
+        locals: *mut LocalTab,
+    ) {
+        let mut is_none = false;
+        let mut some_v: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+        if unsafe { (*init).kind } == pm_jit_rsx_ast_kind::PATH
+            && unsafe { (*init).n_kids } == 1
+        {
+            let only = unsafe { *(*init).kids.add(0) };
+            is_none = unsafe { (*only).kind } == pm_jit_rsx_ast_kind::PATH
+                && unsafe { z_eq((*only).text, (*only).text_len, b"None\0".as_ptr()) };
+            if !is_none && unsafe { (*only).kind } == pm_jit_rsx_ast_kind::CALL {
+                let ck = unsafe { (*only).kids };
+                if unsafe { (*only).n_kids } as usize == 2 {
+                    some_v = self.some_arg(unsafe { *ck.add(0) }, unsafe { *ck.add(1) });
+                }
+            }
+        } else if unsafe { (*init).kind } == pm_jit_rsx_ast_kind::CALL {
+            let ck = unsafe { (*init).kids };
+            if unsafe { (*init).n_kids } as usize == 2 {
+                some_v = self.some_arg(unsafe { *ck.add(0) }, unsafe { *ck.add(1) });
+            }
+        }
+        if !is_none && some_v.is_null() {
+            unsafe { self.emit_expr(init, locals) };
+            return;
+        }
+        if ct_len >= 8 && unsafe { z_eq(ct, 8, b"rsx_opt_\0".as_ptr()) } {
+            self.out.putc(b'(');
+            self.out.put(ct, ct_len);
+            if is_none {
+                self.out.puts(b"){ ._v = {0}, ._has = 0 }\0".as_ptr());
+            } else {
+                self.out.puts(b"){ ._v = \0".as_ptr());
+                unsafe { self.emit_expr(some_v, locals) };
+                self.out.puts(b", ._has = 1 }\0".as_ptr());
+            }
+        } else if is_none {
+            self.out.puts(b"NULL\0".as_ptr());
+        } else {
+            unsafe { self.emit_expr(some_v, locals) };
+        }
+    }
+
+    /* Some(v)'s single argument when callee + arg-list carry the
+     * single-segment `Some` shape; null otherwise. */
+    unsafe fn some_arg(
+        &mut self,
+        callee: *const pm_jit_rsx_ast_t,
+        args: *const pm_jit_rsx_ast_t,
+    ) -> *const pm_jit_rsx_ast_t {
+        if unsafe { (*callee).kind } != pm_jit_rsx_ast_kind::PATH
+            || unsafe { (*callee).n_kids } != 1
+        {
+            return core::ptr::null_mut();
+        }
+        let cseg = unsafe { *(*callee).kids.add(0) };
+        if !unsafe { z_eq((*cseg).text, (*cseg).text_len, b"Some\0".as_ptr()) } {
+            return core::ptr::null_mut();
+        }
+        if unsafe { (*args).n_kids } as usize != 1 {
+            return core::ptr::null_mut();
+        }
+        unsafe { *(*args).kids.add(0) }
+    }
+
+    /* Destructuring `let` — the struct pattern `S { a, b }` / `S { a: x,
+     * .. }` and the constructor pattern `P(a, b)`: one temp (per-scope
+     * counter, the __rsx_tup twin) holds the initializer — single
+     * evaluation — then every bind declares a local of the FIELD's C
+     * type from the temp. Named-field access for `pstruct`, declaration-
+     * index access (field_by_index) for the positional `ctor`. The
+     * refutable constructor binds (Some/Ok/Err) never land here —
+     * parse_let_rest demands the diverging else for those and routes
+     * them to emit_let_else. */
+    unsafe fn emit_let_destruct(&mut self, s: *const pm_jit_rsx_ast_t, locals: *mut LocalTab) {
+        let kids = unsafe { (*s).kids };
+        let nk = unsafe { (*s).n_kids } as usize;
+        let line = unsafe { (*s).line };
+        if nk < 2 {
+            unsafe {
+                self.err(b"destructuring let with no initializer\0".as_ptr(), line);
+            }
+            return;
+        }
+        let root = unsafe { *kids.add(0) };
+        let mut init: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+        let mut ty: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+        let mut i = 1usize;
+        while i < nk {
+            let k = unsafe { *kids.add(i) };
+            let kk = unsafe { (*k).kind };
+            if kk == pm_jit_rsx_ast_kind::TYPE {
+                ty = k;
+            } else {
+                init = k;
+            }
+            i += 1;
+        }
+        while !init.is_null()
+            && unsafe { (*init).kind } == pm_jit_rsx_ast_kind::EXPR_STMT
+            && unsafe { (*init).n_kids } as usize >= 1
+        {
+            init = unsafe { *(*init).kids.add(0) };
+        }
+        if init.is_null() {
+            unsafe {
+                self.err(b"destructuring let with no initializer\0".as_ptr(), line);
+            }
+            return;
+        }
+        let ct = self.arena_tmp();
+        let mut ct_len = 0usize;
+        if !ty.is_null() {
+            ct_len = unsafe { self.ctype(ty, ct, 128) };
+        }
+        if ct_len == 0 {
+            ct_len = unsafe { self.expr_ctype(init, ct, 128, locals) };
+        }
+        if ct_len == 0 || ct_len >= 128 {
+            unsafe {
+                self.err(
+                    b"cannot infer destructuring let type - ascribe it\0".as_ptr(),
+                    line,
+                );
+            }
+            return;
+        }
+        /* typedefs interned by the type walk must be flushed before the
+         * temp's type is emitted (the let-else twin does the same) */
+        unsafe {
+            self.fnp_emit_rest();
+            self.opt_emit_rest(0);
+            self.tup_emit_rest();
+        }
+        /* the temp: per-scope counter so a second destructure in the same
+         * C scope does not redeclare it (the __rsx_tup twin) */
+        let tmp = self.arena_tmp();
+        let at0 = unsafe { bput(tmp, 160, 0, b"__rsx_s\0".as_ptr(), 7) };
+        let mut cnt = self.tup_tmp_n;
+        self.tup_tmp_n += 1;
+        let mut digs: [u8; 10] = [0; 10];
+        let mut nd = 0usize;
+        if cnt == 0 {
+            digs[0] = b'0';
+            nd = 1;
+        } else {
+            while cnt > 0 && nd < 10 {
+                digs[nd] = b'0' + (cnt % 10) as u8;
+                cnt /= 10;
+                nd += 1;
+            }
+        }
+        let mut q = nd;
+        let mut tmp_len = at0;
+        while q > 0 {
+            q -= 1;
+            tmp_len = unsafe { bput(tmp, 160, tmp_len, &digs[q], 1) };
+        }
+        unsafe {
+            if tmp_len < 160 {
+                *tmp.add(tmp_len) = 0;
+            }
+        }
+        self.indent();
+        self.out.put(ct, ct_len);
+        self.out.putc(b' ');
+        self.out.put(tmp, tmp_len);
+        self.out.puts(b" = {0};\n\0".as_ptr());
+        /* value-position if/match/block store into the temp; any other
+         * expr assigns directly (the emit_let_tuple twin) */
+        let saved_ret: [u8; 128] = self.cur_ret;
+        let saved_ret_len = self.cur_ret_len;
+        {
+            let mut j = 0usize;
+            while j < ct_len && j < 127 {
+                self.cur_ret[j] = unsafe { *ct.add(j) };
+                j += 1;
+            }
+            self.cur_ret_len = ct_len;
+        }
+        let ik = unsafe { (*init).kind };
+        if ik == pm_jit_rsx_ast_kind::IF {
+            unsafe { self.emit_if_value(init, locals, tmp, tmp_len) };
+        } else if ik == pm_jit_rsx_ast_kind::MATCH {
+            unsafe { self.emit_match_value(init, locals, tmp, tmp_len) };
+        } else if ik == pm_jit_rsx_ast_kind::BLOCK && (unsafe { (*init).n_kids } as usize) >= 2 {
+            unsafe { self.emit_block_value(init, locals, tmp, tmp_len) };
+        } else {
+            self.indent();
+            self.out.put(tmp, tmp_len);
+            self.out.puts(b" = \0".as_ptr());
+            unsafe { self.emit_expr(init, locals) };
+            self.out.puts(b";\n\0".as_ptr());
+        }
+        self.cur_ret = saved_ret;
+        self.cur_ret_len = saved_ret_len;
+        /* the head the SymTab fields hang off */
+        let is_pstruct = unsafe { (*root).text_len } == 7
+            && !unsafe { (*root).text }.is_null()
+            && unsafe { z_eq((*root).text, 7, b"pstruct\0".as_ptr()) };
+        let rk = unsafe { (*root).kids };
+        let rn = unsafe { (*root).n_kids } as usize;
+        if rn < 2 {
+            unsafe {
+                self.err(b"destructuring let with no binds\0".as_ptr(), line);
+            }
+            return;
+        }
+        /* `pat` single-ctor (`P(x)`) — the ctor head is the second-to-last
+         * kid (segments may precede it), the bind the last */
+        let mut first_bind = 1usize;
+        let mut head = unsafe { *rk.add(0) };
+        if !is_pstruct
+            && unsafe { (*root).text_len } == 3
+            && unsafe { z_eq((*root).text, 3, b"pat\0".as_ptr()) }
+        {
+            head = unsafe { *rk.add(rn - 2) };
+            first_bind = rn - 1;
+        }
+        let hn = unsafe { (*head).text };
+        let hl = unsafe { (*head).text_len };
+        if hn.is_null() {
+            unsafe {
+                self.err(b"unsupported: destructuring pattern head\0".as_ptr(), line);
+            }
+            return;
+        }
+        let sidx = unsafe { (*self.syms).find(hn, hl) };
+        if sidx == 0 {
+            unsafe {
+                self.err(b"unsupported: unknown type in destructuring pattern\0".as_ptr(), line);
+            }
+            return;
+        }
+        if is_pstruct {
+            /* pairs: STRUCT_FIELD(f), bind, ... — named-field access */
+            let mut f = first_bind;
+            while f + 1 < rn {
+                let fnode = unsafe { *rk.add(f) };
+                let bind = unsafe { *rk.add(f + 1) };
+                if unsafe { (*fnode).kind } != pm_jit_rsx_ast_kind::STRUCT_FIELD {
+                    unsafe {
+                        self.err(b"internal: struct pattern field\0".as_ptr(), line);
+                    }
+                    return;
+                }
+                let fct = self.arena_tmp();
+                let fl = unsafe {
+                    (*self.syms)
+                        .field_ctype(sidx, (*fnode).text, (*fnode).text_len, fct)
+                };
+                if fl == 0 {
+                    unsafe {
+                        self.err(b"unknown field in destructuring pattern\0".as_ptr(), line);
+                    }
+                    return;
+                }
+                unsafe {
+                    self.destr_bind(
+                        bind,
+                        fct,
+                        fl,
+                        (*fnode).text,
+                        (*fnode).text_len,
+                        tmp,
+                        tmp_len,
+                        line,
+                        locals,
+                    );
+                }
+                f += 2;
+            }
+            return;
+        }
+        /* positional `ctor` — binds map onto the fields in declaration
+         * order (field_by_index), arity must match exactly */
+        let nbinds = rn - first_bind;
+        if unsafe { (*self.syms).count(sidx) } != nbinds {
+            unsafe {
+                self.err(b"constructor destructuring arity mismatch\0".as_ptr(), line);
+            }
+            return;
+        }
+        let mut b = 0usize;
+        while b < nbinds {
+            let bind = unsafe { *rk.add(first_bind + b) };
+            let fct = self.arena_tmp();
+            let mut fname: *const u8 = core::ptr::null();
+            let mut fname_len: usize = 0;
+            let fl = unsafe {
+                (*self.syms).field_by_index(
+                    sidx,
+                    b,
+                    &mut fname,
+                    &mut fname_len,
+                    fct,
+                    128,
+                )
+            };
+            if fl == 0 {
+                unsafe {
+                    self.err(b"internal: constructor field lookup\0".as_ptr(), line);
+                }
+                return;
+            }
+            unsafe {
+                self.destr_bind(bind, fct, fl, fname, fname_len, tmp, tmp_len, line, locals);
+            }
+            b += 1;
+        }
+    }
+
     /* `Vec::new()` — CALL whose callee path's leaf is `new` with the
      * `Vec` segment before it (no args). */
     unsafe fn init_is_vec_new(&mut self, init: *const pm_jit_rsx_ast_t) -> bool {
@@ -1512,15 +1891,67 @@ impl Lower {
             return;
         }
         /* tuple pattern `let (a, b) = ..`: destructure — one temp holds the
-         * whole tuple, each element bind declares from the temp's field. */
+         * whole tuple, each element bind declares from the temp's field.
+         * `pstruct` (`S { a, .. }`), `ctor` (`P(a, b)`) and the single-ctor
+         * `pat` nodes destructure through emit_let_destruct; a `pat` over
+         * Some/Ok/Err is the refutable contract (emit_let_else, whose
+         * parse-time rule already demands the diverging else). */
         {
             let kids0 = unsafe { (*s).kids };
             let nk0 = unsafe { (*s).n_kids } as usize;
             if nk0 >= 1 {
                 let k0 = unsafe { *kids0.add(0) };
-                if unsafe { (*k0).kind } == pm_jit_rsx_ast_kind::TUPLE {
+                let k0k = unsafe { (*k0).kind };
+                if k0k == pm_jit_rsx_ast_kind::TUPLE {
                     unsafe { self.emit_let_tuple(s, locals) };
                     return;
+                }
+                if k0k == pm_jit_rsx_ast_kind::PATH {
+                    let t0 = unsafe { (*k0).text };
+                    let t0l = unsafe { (*k0).text_len };
+                    let k0n = unsafe { (*k0).n_kids } as usize;
+                    if k0n >= 1 && !t0.is_null() {
+                        if (t0l == 7 && unsafe { z_eq(t0, 7, b"pstruct\0".as_ptr()) })
+                            || (t0l == 4 && unsafe { z_eq(t0, 4, b"ctor\0".as_ptr()) })
+                        {
+                            unsafe { self.emit_let_destruct(s, locals) };
+                            return;
+                        }
+                        if t0l == 3 && unsafe { z_eq(t0, 3, b"pat\0".as_ptr()) } {
+                            if k0n == 2 {
+                                let head = unsafe { *(*k0).kids.add(0) };
+                                let ht = unsafe { (*head).text };
+                                let hl = unsafe { (*head).text_len };
+                                if !ht.is_null()
+                                    && (unsafe { z_eq(ht, hl, b"Some\0".as_ptr()) }
+                                        || unsafe { z_eq(ht, hl, b"Ok\0".as_ptr()) }
+                                        || unsafe { z_eq(ht, hl, b"Err\0".as_ptr()) })
+                                {
+                                    unsafe { self.emit_let_else(s, locals) };
+                                    return;
+                                }
+                            }
+                            unsafe { self.emit_let_destruct(s, locals) };
+                            return;
+                        }
+                        if t0l == 4 && unsafe { z_eq(t0, 4, b"path\0".as_ptr()) } && k0n >= 2 {
+                            /* the struct-LITERAL pattern shape (`foo::S
+                             * { .. }` routes through parse_path_expr): its
+                             * last kid is the STRUCT_LIT and it never binds
+                             * fields — refuse, don't emit the name-less
+                             * `sv == S` junk it used to render. */
+                            let k1 = unsafe { *(*k0).kids.add(k0n - 1) };
+                            if unsafe { (*k1).kind } == pm_jit_rsx_ast_kind::STRUCT_LIT {
+                                unsafe {
+                                    self.err(
+                                        b"unsupported: struct pattern\0".as_ptr(),
+                                        (*s).line,
+                                    );
+                                }
+                                return;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1581,7 +2012,14 @@ impl Lower {
                 return;
             }
         } else if !init.is_null() {
-            ct_len = unsafe { self.expr_ctype(init, ct, 128, locals) };
+            if unsafe { (*init).kind } == pm_jit_rsx_ast_kind::CLOSURE {
+                /* closure as value (unannotated let): the fn-pointer
+                 * spelling comes from the closure itself — its `: T`
+                 * annotations plus the body's inferred return. */
+                ct_len = unsafe { self.clo_type_of(init, ct, 128) };
+            } else {
+                ct_len = unsafe { self.expr_ctype(init, ct, 128, locals) };
+            }
             if ct_len == 0 {
                 /* `let v = Vec::new()` — an empty container typed by its
                  * uses: scan the fn body for the binding's first .push(x)
@@ -1832,7 +2270,7 @@ impl Lower {
                 self.emit_declarator(ct, ct_len, cname, cname_len);
             }
             self.out.puts(b" = \0".as_ptr());
-            unsafe { self.emit_expr(init, locals) };
+            unsafe { self.emit_opt_init(init, ct, ct_len, locals) };
             self.out.puts(b";\n\0".as_ptr());
             unsafe {
                 (*locals).add_renamed(name, name_len, cname, cname_len, ct, ct_len, self.depth);
@@ -1847,7 +2285,7 @@ impl Lower {
             self.out.put(name, name_len);
             self.out.puts(b" = \0".as_ptr());
             if !init.is_null() {
-                unsafe { self.emit_expr(init, locals) };
+                unsafe { self.emit_opt_init(init, ct, ct_len, locals) };
             }
             self.out.puts(b";\n\0".as_ptr());
             return;
@@ -1958,9 +2396,24 @@ impl Lower {
                 return;
             }
             if ik == pm_jit_rsx_ast_kind::CLOSURE {
-                unsafe {
-                    self.err(b"unsupported: closure in let initializer\0".as_ptr(), line);
+                /* closure as value: a synthesized static fn
+                 * (`rsx_clo_<n>`) carries the body; this binding takes
+                 * its designator. The fn-ptr ascription (ty) types the
+                 * synthesized signature exactly when present. */
+                let slot = unsafe { self.clo_synth(init, locals, ty, line) };
+                if slot == 0 {
+                    return;
                 }
+                self.indent();
+                unsafe {
+                    self.emit_declarator(ct, ct_len, name, name_len);
+                }
+                self.out.puts(b" = \0".as_ptr());
+                self.out.put(
+                    self.clo_names[slot - 1].as_ptr(),
+                    self.clo_name_lens[slot - 1],
+                );
+                self.out.puts(b";\n\0".as_ptr());
                 return;
             }
             /* Block initializer with statements: the statements are the
@@ -2027,7 +2480,7 @@ impl Lower {
                 self.out.put_u32(inner as u32);
                 self.out.puts(b" }\0".as_ptr());
             } else {
-                unsafe { self.emit_expr(init, locals) };
+                unsafe { self.emit_opt_init(init, ct, ct_len, locals) };
             }
         }
         self.out.puts(b";\n\0".as_ptr());
@@ -2161,6 +2614,73 @@ impl Lower {
         }
         self.indent();
         self.out.puts(b"}\n\0".as_ptr());
+    }
+
+    /* Value-fn tail dispatch — shared by fn bodies and synthesized
+     * closure fns. The tail expr statement is unwrapped once (a tail
+     * `if .. { a } else { b }` with no trailing `;` arrives
+     * EXPR_STMT-wrapped) and then classified: control-flow and
+     * statement shapes emit as statements, the tail MATCH mintes a
+     * `ret` temp the arms store into, and anything else returns its
+     * value. `ret_ct` is the fn's own C return type (the `ret` temp's
+     * type on the MATCH path). */
+    unsafe fn emit_fn_tail(
+        &mut self,
+        tail_in: *const pm_jit_rsx_ast_t,
+        locals: *mut LocalTab,
+        ret_ct: *const u8,
+        ret_len: usize,
+    ) {
+        let mut tail = tail_in;
+        if unsafe { (*tail).kind } == pm_jit_rsx_ast_kind::EXPR_STMT
+            && unsafe { (*tail).n_kids } >= 1
+        {
+            tail = unsafe { *(*tail).kids.add(0) };
+        }
+        let k = unsafe { (*tail).kind };
+        if k == pm_jit_rsx_ast_kind::IF {
+            /* tail if: each branch returns its own tail expr */
+            unsafe { self.emit_if_tail(tail, locals) };
+        } else if k == pm_jit_rsx_ast_kind::MATCH {
+            /* tail match: declare `ret` from the fn's C type and
+             * let each arm store into it, then return. */
+            self.indent();
+            self.out.put(ret_ct, ret_len);
+            self.out.puts(b" ret;\n\0".as_ptr());
+            unsafe { self.emit_match_value(tail, locals, b"ret\0".as_ptr(), 3) };
+            /* live guards release before the tail return — the
+             * value-tail path skips end_block entirely. */
+            unsafe { self.release_guards_all(locals) };
+            self.indent();
+            self.out.puts(b"return ret;\n\0".as_ptr());
+        } else if k == pm_jit_rsx_ast_kind::RETURN
+            || k == pm_jit_rsx_ast_kind::LET
+            || k == pm_jit_rsx_ast_kind::STMT
+            || k == pm_jit_rsx_ast_kind::EXPR_STMT
+            || k == pm_jit_rsx_ast_kind::ASSIGN
+            || k == pm_jit_rsx_ast_kind::LOOP
+            /* a value-typed fn with a statement-shaped macro
+             * tail: the expression macros (vec!/format!)
+             * ARE the return value; anything else keeps the
+             * old statement-skip (void-tail call macros,
+             * assert!-style) rather than a bogus `return`. */
+            || (k == pm_jit_rsx_ast_kind::MACRO && !self.macro_is_value(tail))
+        {
+            unsafe { self.emit_stmt(tail, locals, 0) };
+        } else if k == pm_jit_rsx_ast_kind::BLOCK {
+            /* tail block expr (typically an `unsafe { value }`
+             * wrapper): walk to the inner tail and return it. */
+            unsafe { self.emit_block_tail_ret(tail, locals) };
+        } else {
+            self.indent();
+            self.out.puts(b"return \0".as_ptr());
+            unsafe { self.emit_ret_value(tail, locals) };
+            self.out.puts(b";\n\0".as_ptr());
+        }
+        /* any tail shape: live guards release before the fn's closing
+         * brace (statement tails and diverging tails both land here
+         * after their own emission). */
+        unsafe { self.release_guards_all(locals) };
     }
 
     /* Block whose tail expr returns. */

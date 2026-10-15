@@ -771,6 +771,9 @@ static int32_t case_export_manifest(void) {
             { "pymergetic.metal.build", "pm_metal_build_object_count" },
             { "pymergetic.metal.build", "pm_metal_build_object_info" },
             { "pymergetic.metal.build", "pm_metal_build_object_read" },
+            /* the selfhost splice face: tools/selfhost_feed --splice reads
+             * the flat compiler source through the same registry seam */
+            { "pymergetic.metal.build", "pm_metal_build_rs_splice" },
             /* which cross lanes this seat carries, so a caller can ask
              * before it submits instead of failing once per unit */
             { "pymergetic.metal.jit.c", "pm_metal_jit_c_target_mask" },
@@ -788,18 +791,18 @@ static int32_t case_export_manifest(void) {
                 return fail("expected export missing from the registry");
             }
         }
-        /* expected == registered, exactly: the build card's face is 35
+        /* expected == registered, exactly: the build card's face is 36
          * exports (26 of the Phase-5/actor set + the two event-ring
          * faces + the three walk faces + the actor post face + the three
-         * retained-object faces). A 36th export means a new face the
-         * manifest does not know; a lower count means a registration
-         * refused. */
+         * retained-object faces + the selfhost rs splice face). A 37th
+         * export means a new face the manifest does not know; a lower
+         * count means a registration refused. */
         {
             uint32_t reg = pm_wasmmod_registry_export_count(
                 (const uint8_t *)"pymergetic.metal.build", 22u);
-            if (reg != 35u) {
+            if (reg != 36u) {
                 fprintf(stderr, "metal.inspect test: build face %u "
-                    "registered, 35 expected\n", (unsigned)reg);
+                    "registered, 36 expected\n", (unsigned)reg);
                 return fail("build export count != manifest");
             }
         }

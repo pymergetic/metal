@@ -76,6 +76,16 @@ pub unsafe extern "C" fn pm_metal_jit_rsx_parse(
         shr_closes: 0,
         feats: core::ptr::null(),
         hoist: Kids::new(),
+        mac_names: [[0; 48]; MAC_CAP],
+        mac_lens: [0; MAC_CAP],
+        mac_np: [0; MAC_CAP],
+        mac_pnames: [[0; 24]; MAC_CAP * MAC_PARAMS],
+        mac_plens: [0; MAC_CAP * MAC_PARAMS],
+        mac_pkinds: [0; MAC_CAP * MAC_PARAMS],
+        mac_body: [core::ptr::null(); MAC_CAP],
+        mac_blens: [0; MAC_CAP],
+        mac_n: 0,
+        mac_depth: 0,
     };
     let file = unsafe { p.parse_file() };
     if !p.ok || !p.nd.ok || file.is_null() {

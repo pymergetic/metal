@@ -997,6 +997,25 @@ impl Lower {
             }
             return;
         }
+        /* a generic struct literal (`Pair { a: 1u8, b: 2u8 }`) spells
+         * its monomorphized row — the args infer from the field values'
+         * C types (gen_lit_row); without a resolvable row it refuses,
+         * never renders a C type the unit never defines */
+        if unsafe { self.gen_find(tname, tlen) } < GEN_DEF_CAP {
+            let rb = self.arena_tmp();
+            let rl = unsafe { self.gen_lit_row(lit, tname, tlen, locals, rb, 160) };
+            if rl == 0 {
+                unsafe {
+                    self.err(
+                        b"unsupported: infer generic literal - ascribe it\0".as_ptr(),
+                        (*lit).line,
+                    );
+                }
+                return;
+            }
+            tname = rb;
+            tlen = rl;
+        }
         /* fields on sl's kids: alternating STRUCT_FIELD, value */
         let fk = unsafe { (*sl).kids };
         let fkn = unsafe { (*sl).n_kids } as usize;
@@ -1454,7 +1473,14 @@ impl Lower {
             pm_jit_rsx_ast_kind::TUPLE => unsafe { self.emit_tuple_expr(e, locals) },
             pm_jit_rsx_ast_kind::STRUCT_LIT => unsafe { self.emit_struct_lit(e, locals) },
             pm_jit_rsx_ast_kind::CLOSURE => unsafe {
-                self.err(b"unsupported: closure\0".as_ptr(), (*e).line);
+                /* closure as value: the use site emits the synthesized
+                 * static fn's designator (a fn-ptr value in C). Capturing
+                 * closures refuse inside clo_synth. */
+                let slot = self.clo_synth(e, locals, core::ptr::null(), (*e).line);
+                if slot > 0 {
+                    self.out
+                        .put(self.clo_names[slot - 1].as_ptr(), self.clo_name_lens[slot - 1]);
+                }
             },
             pm_jit_rsx_ast_kind::MACRO => unsafe {
                 /* vec![..] — emit the container ctor. The typing pass

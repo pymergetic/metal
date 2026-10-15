@@ -13,38 +13,72 @@
 // Items: `#![...]` inner attrs (skipped), `use` (recorded, lowered to a
 // comment), outer attrs `#[repr(C)] #[derive(..)] #[allow(..)] #[used]
 // #[cfg_attr(..)] #[link_section = ".."] #[unsafe(no_mangle)]`, `pub` /
-// `pub(crate)` visibility, named/tuple/unit `struct`, fieldless `enum` (data
-// variants refused at lowering — C has no sum types), `impl Type` /
-// `impl Trait for Type`, `extern "C" { fn .. }` blocks, `static`/`const`
-// (literal initializers), `type` aliases, `fn` with `const`/`unsafe`/
-// `extern "C"` qualifiers, `mod name;` / `mod name { .. }` items (module
-// structure is compile-time — both forms lower to a comment, the inline
-// body is not lowered). Refused: generics on items, `trait` items,
-// `macro_rules!`, `async`/`const` blocks, nested items in fn bodies.
+// `pub(crate)` visibility, named/tuple/unit `struct`, generic `struct
+// S<T> { .. }` (multi-field, monomorphized per instantiation), `enum`
+// (fieldless AND data-carrying variants incl. struct variants — the sum
+// type lowers to tag + payload structs and `match` decomposes it),
+// `impl Type` / `impl Trait for Type`, `extern "C" { fn .. }` blocks,
+// `static`/`const` (literal initializers), `type` aliases, `fn` with
+// `const`/`unsafe`/`extern "C"` qualifiers, generic `fn f<T>(..)`
+// (monomorphized per concrete call site), `mod name;` / `mod name { .. }`
+// items (module structure is compile-time — both forms lower to a
+// comment, the inline body is not lowered), nested `fn` items inside fn
+// bodies, and `macro_rules!` definitions (below). Refused: generics on
+// `impl`/`extern`/`static`/`const`/`type`, non-type generic params
+// (`const N: usize`, lifetimes), `async`/`const` blocks.
 //
-// Statements: `let` (ident / `mut ident` / `_`, optional type + init; let-else
-// refused), `if`/`else`, `match`, `loop`, `while`, `for pat in a..b` /
-// `a..=b`, `return`/`break`/`continue` (labeled too: `'l: for …` +
-// `continue 'l` — C has no labeled break, so it lowers to goto labels),
-// expression and assignment statements.
+// Statements: `let` (ident / `mut ident` / `_`, optional type + init),
+// destructuring `let (a, b) = ..`, `let P(a, b) = ..`,
+// `let S { a, b } = ..` incl. `S { a: x }` renames, `mut` binds and a
+// `..` rest (each bind becomes a new local typed from the struct/enum
+// layout; nested patterns refuse), and let-else for single-constructor
+// patterns (`let Some(x) = E else { diverge }` / `P(x) = E else { .. }` —
+// the else block must diverge), `if`/`else`, `match`, `loop`, `while`,
+// `for pat in a..b` / `a..=b` / `v.iter()` (iterator loop), `return`/
+// `break`/`continue` (labeled too: `'l: for …` + `continue 'l` — C has
+// no labeled break, so it lowers to goto labels), expression and
+// assignment statements.
 //
 // Expressions: literals (int with suffixes, float, char, byte char/string,
-// string, raw string), paths, calls, method calls, field access, indexing
+// string, raw string), paths, calls (incl. generic calls, monomorphized),
+// method calls (incl. trait dispatch `x.m()`), field access, indexing
 // (incl. range indexes `a[..n]` `a[n..]` `a[n..m]` — the slice stays a
 // pointer to the start element, the length side is not carried), casts,
 // unary `! - * & &mut`, binary ops, ranges, parens, struct literals
-// (`T { f: v }` — `..base` and shorthand refused), block-exprs, `unsafe`
-// blocks, `expr?` (Option-of-pointer only, inside a pointer-returning fn —
-// lowers to a GNU statement expression that early-returns `0`/None).
-// Closures parse but lowering refuses them.
+// (`T { f: v }` incl. `..base` update, `S { a }` shorthand, and generic
+// literals whose type args infer from the fields), block-exprs, `unsafe`
+// blocks, `expr?` (Option/Result of pointer payload inside a
+// pointer-returning fn — lowers to a GNU statement expression that
+// early-returns `0`/None). Closures: a capture-less closure lowers INLINE
+// in `.map()`/`.unwrap_or_else()`/for-loop position, and as a VALUE
+// (`let g: fn(u8)->u8 = |x: u8| x+1;`, `h(|x| ..)` fn-ptr args) it
+// becomes a synthesized static `rsx_clo_N` whose address is the value;
+// a closure that CAPTURES outer locals refuses as a value
+// (`rsx: unsupported: capturing closure as value`).
+//
+// Macros: `macro_rules! name { ( $x:expr, ... ) => { body } }` — one
+// fixed-arity matcher, metavariable kinds `expr`/`ident`/`literal` only,
+// expansion is textual substitution with each argument parenthesized as
+// a token tree; `name!(..)` in expression position expands at parse
+// time. Refused: recursion (expansion depth > 4), other metavariable
+// kinds (`ty`, `tt`, `stmt`, `pat`), multiple matcher arms, `$(..)`
+// repetition, and path-qualified `a::m!(..)` invocations (they stay
+// opaque and the lowering refuses them). Built-in macros with their own
+// lowering: `vec!`, `format!`, `print!`/`println!`/`eprint!`/
+// `eprintln!`, `write!`/`writeln!`, the `assert!` family, the `case(..)`
+// harness, and item-level `PM_MOD_EXPORT_RS!` / `PM_MOD_BOOT*_RS!`
+// ctors (lower to a comment — the registry table is built by the real
+// toolchain). Every other macro refuses.
 //
 // Types: `u8..u64` `i8..i64` `usize` `isize` `f32` `f64` `bool` `char`
 // (`u128`/`i128` have no C type), `*const T` `*mut T` `&T` `&mut T`
 // (lifetimes skipped), `[T; N]` `[T]` `&[T]`, `()` (return only), paths
-// with one generic list (`Option<T>` — pointer/fn-ptr payload only),
-// `fn(..) -> R` and `unsafe extern "C" fn(..) -> R`, tuples `(A, B)` ->
+// with one generic list (`Option<T>` — pointer/fn-ptr payload only; a
+// generic PARAMETER inside a std generic refuses), `fn(..) -> R` and
+// `unsafe extern "C" fn(..) -> R`, tuples `(A, B)` ->
 // anonymous-layout structs `_0`/`_1`/... (let-pattern destructuring and
-// numeric field access `t.0` included; tuple struct patterns refuse).
+// numeric field access `t.0` included; tuple-struct patterns `P(a, b)`
+// destructure in `match` and `let`).
 //
 // ## Lowering rules
 //
@@ -59,18 +93,20 @@
 //   `isize`->`intptr_t`, `f32`->`float`, `f64`->`double`, `bool`->`bool`,
 //   `char`->`uint32_t`, `*const T`/`&T`->`const C_T *`, `*mut T`/`&mut T`->
 //   `C_T *`, `&str`->`const char *`, `&[T]`/`[T]`->`const C_T *` (length is
-//   not carried — the kernel passes ptr+len pairs; `.len()` on a slice is
-//   refused), `()`->`void`, `Option<ptr-or-fn>` -> the inner C type
+//   not carried — the kernel passes ptr+len pairs; `.len()` resolves only
+//   where the length is a compile-time constant), `()`->`void`, `Option<ptr-or-fn>` -> the inner C type
 //   (`None`->`0`), `fn`/`unsafe extern "C" fn` -> function pointer.
 // - `fn` -> C prototype + body; `unsafe`/`extern "C"`/`const` qualifiers
 //   drop (C has no unsafe). Methods -> free functions `Type_method` (trait
 //   impls: `Type_Trait_method`); `&self`/`&mut self` become `Type *self`.
 // - `match` lowers to an `if`/`else` chain. Supported patterns: literals,
-//   enum variant paths, `_`, `None`, `Some(bind)` (Option-of-pointer only —
-//   the bind becomes an inner declaration), `&bind`, or-patterns of
-//   literals/variants, literal range patterns `lo..=hi` (inclusive both
-//   ends). Guards, open-ended ranges, tuple-of-Some `let-else` is the one
-//   tuple form accepted; struct patterns refuse.
+//   enum variant paths (incl. payload binds on data-carrying variants and
+//   struct variants), `_`, `None`, `Some(bind)` (Option-of-pointer only —
+//   the bind becomes an inner declaration), `&bind`, struct patterns
+//   `S { a, b }` (incl. `a: x` renames and `..`), tuple-struct patterns
+//   `P(a, b)`, or-patterns of literals/variants, literal range patterns
+//   `lo..=hi` (inclusive both ends). Guards and open-ended ranges; a
+//   single-constructor pattern in a `let` needs the diverging let-else.
 // - `for x in a..b` -> C `for` loop; `for` over anything else refuses.
 // - `static` -> file-scope global (`const` qualified unless `static mut`),
 //   `const` -> `static const`, `type` -> `typedef`.
@@ -95,7 +131,10 @@
 //   `core::hint::spin_loop()` -> `0`. Anything else refuses.
 // - Item-level `PM_MOD_EXPORT_RS!` / `PM_MOD_BOOT*_RS!` ctors lower to a
 //   `//` comment (the registry table is built by the real toolchain).
-//   Every other macro refuses.
+//   `macro_rules!` definitions and their `name!(..)` invocations expand
+//   at parse time (see the Macros section); the other built-in macros
+//   (`vec!`, `format!`, the print/write family, `assert!`) have their own
+//   lowering. Every other macro refuses.
 // - Value-position `if`/`else` needs a type ascription (`let x: T = if ..`).
 //
 // ## Self-hosting discipline (this file is its own test input)

@@ -91,6 +91,27 @@ impl Out {
         }
     }
 
+    /* Field-wise swap with a scratch Out (Out is not Copy) — two swaps
+     * are the restore. The buffered-text planes (fn text, synthesized
+     * closure defs) park themselves over self.out this way. */
+    unsafe fn swap(&mut self, other: &mut Out) {
+        let a = self.arena;
+        let p = self.p;
+        let n = self.len;
+        let c = self.cap;
+        let o = self.ok;
+        self.arena = other.arena;
+        self.p = other.p;
+        self.len = other.len;
+        self.cap = other.cap;
+        self.ok = other.ok;
+        other.arena = a;
+        other.p = p;
+        other.len = n;
+        other.cap = c;
+        other.ok = o;
+    }
+
     unsafe fn reserve(&mut self, extra: usize) {
         let mut ncap: usize;
         let nb: *mut u8;
@@ -545,6 +566,92 @@ impl Lexer {
                 }
                 /* `'` present but not a literal form — `b` stays an ident. */
             }
+        }
+        /* `macro_rules! name { .. }` — the whole definition is ONE token:
+         * the matcher and body carry `$`-metavariables the token stream
+         * never sees. Same opaque-text contract as macro invocations —
+         * the parser registers the definition by scanning the text. A
+         * non-`{` def form restores pos and falls through: normal
+         * lexing then leaves `macro_rules` an ident and the parser
+         * refuses the item kind. */
+        if self.pos - start == 11
+            && unsafe { z_eq(self.src.add(start), 11, b"macro_rules\0".as_ptr()) }
+            && unsafe { self.peek(0) } == b'!'
+        {
+            let mut p2 = self.pos + 1;
+            while p2 < self.src_len
+                && (unsafe { *self.src.add(p2) } == b' '
+                    || unsafe { *self.src.add(p2) } == b'\n'
+                    || unsafe { *self.src.add(p2) } == b'\t'
+                    || unsafe { *self.src.add(p2) } == b'\r')
+            {
+                p2 += 1;
+            }
+            let nstart = p2;
+            while p2 < self.src_len && is_ident_cont(unsafe { *self.src.add(p2) }) {
+                p2 += 1;
+            }
+            let mut ok_def = p2 > nstart;
+            if ok_def {
+                while p2 < self.src_len
+                    && (unsafe { *self.src.add(p2) } == b' '
+                        || unsafe { *self.src.add(p2) } == b'\n'
+                        || unsafe { *self.src.add(p2) } == b'\t'
+                        || unsafe { *self.src.add(p2) } == b'\r')
+                {
+                    p2 += 1;
+                }
+                ok_def = p2 < self.src_len && unsafe { *self.src.add(p2) } == b'{';
+            }
+            if ok_def {
+                self.pos = p2 + 1;
+                let mut depth = 1usize;
+                while self.pos < self.src_len && depth > 0 {
+                    let c = unsafe { *self.src.add(self.pos) };
+                    if c == b'"' {
+                        unsafe {
+                            self.skip_string_body();
+                        }
+                        if !self.ok {
+                            return;
+                        }
+                        continue;
+                    }
+                    if c == b'\'' && unsafe { self.skip_char_body() } {
+                        continue;
+                    }
+                    if c == b'/' && unsafe { self.peek(1) } == b'/' {
+                        unsafe {
+                            self.skip_trivia();
+                        }
+                        if !self.ok {
+                            return;
+                        }
+                        continue;
+                    }
+                    if c == b'\n' {
+                        self.line += 1;
+                    }
+                    if c == b'{' {
+                        depth += 1;
+                    } else if c == b'}' {
+                        depth -= 1;
+                    }
+                    self.pos += 1;
+                }
+                if depth != 0 {
+                    unsafe {
+                        self.err(b"unterminated macro_rules!\0".as_ptr());
+                    }
+                    return;
+                }
+                unsafe {
+                    self.push(pm_jit_rsx_tok_kind::MACRO_INVOC, start, self.pos);
+                }
+                return;
+            }
+            /* non-`{` form: fall through with pos back on the ident */
+            self.pos = start + 11;
         }
         /* Macro invocation: ident! then a balanced delimiter group. One
          * token — the parser keeps it opaque, lowering decides

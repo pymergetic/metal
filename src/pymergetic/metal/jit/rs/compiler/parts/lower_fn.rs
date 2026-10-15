@@ -173,6 +173,10 @@ impl Lower {
             if self.tup_n != before_t {
                 unsafe { self.tup_emit_rest() };
             }
+            /* monomorphized struct rows the pre-scan interned (a
+             * `let p: Pair<u8>`, a fn-signature use) — before the
+             * signature/prototypes and the buffered body text */
+            unsafe { self.gen_emit_rest() };
             /* rewind the pre-scan's rows: the body emission below starts
              * from a clean table (its own param/self registrations are
              * authoritative). Stale spans are unreachable arena garbage,
@@ -183,6 +187,19 @@ impl Lower {
                 (*locals).nmarks = 0;
                 (*locals).epoch += 1;
             }
+        }
+        /* ---- closures as values: buffer this fn's C text (self.out <->
+         * fnbuf) so any synthesized closure fns and their prototypes can
+         * flush ahead of the definition that names them. A failed prior
+         * body that returned early leaves the pair swapped — the flag
+         * re-anchors before the next body buffers its own text. ---- */
+        if declare_only == 0 && !body.is_null() {
+            unsafe { self.clo_begin() };
+            if !self.fnbuf_live {
+                self.out.swap(&mut self.fnbuf);
+                self.fnbuf_live = true;
+            }
+            self.out.len = 0;
         }
         /* #line + signature */
         self.out.puts(b"#line \0".as_ptr());
@@ -322,59 +339,8 @@ impl Lower {
                     i += 1;
                 }
                 if bn > 0 {
-                    let mut tail = unsafe { *bk.add(bn - 1) };
-                    /* a tail expr stmt (`if .. { a } else { b }` with no
-                     * trailing `;`) wraps the value form — unwrap so the
-                     * tail classification sees IF/MATCH, not EXPR_STMT. */
-                    if unsafe { (*tail).kind } == pm_jit_rsx_ast_kind::EXPR_STMT
-                        && unsafe { (*tail).n_kids } >= 1
-                    {
-                        tail = unsafe { *(*tail).kids.add(0) };
-                    }
-                    let k = unsafe { (*tail).kind };
-                    if k == pm_jit_rsx_ast_kind::IF {
-                        /* tail if: each branch returns its own tail expr */
-                        unsafe { self.emit_if_tail(tail, &mut *locals) };
-                    } else if k == pm_jit_rsx_ast_kind::MATCH {
-                        /* tail match: declare `ret` from the fn's C type and
-                         * let each arm store into it, then return. */
-                        self.indent();
-                        self.out.put(ret_ct, ret_len);
-                        self.out.puts(b" ret;\n\0".as_ptr());
-                        unsafe { self.emit_match_value(tail, &mut *locals, b"ret\0".as_ptr(), 3) };
-                        /* live guards release before the tail return — the
-                         * value-tail path skips end_block entirely. */
-                        unsafe { self.release_guards_all(&mut *locals) };
-                        self.indent();
-                        self.out.puts(b"return ret;\n\0".as_ptr());
-                    } else if k == pm_jit_rsx_ast_kind::RETURN
-                        || k == pm_jit_rsx_ast_kind::LET
-                        || k == pm_jit_rsx_ast_kind::STMT
-                        || k == pm_jit_rsx_ast_kind::EXPR_STMT
-                        || k == pm_jit_rsx_ast_kind::ASSIGN
-                        || k == pm_jit_rsx_ast_kind::LOOP
-                        /* a value-typed fn with a statement-shaped macro
-                         * tail: the expression macros (vec!/format!)
-                         * ARE the return value; anything else keeps the
-                         * old statement-skip (void-tail call macros,
-                         * assert!-style) rather than a bogus `return`. */
-                        || (k == pm_jit_rsx_ast_kind::MACRO && !self.macro_is_value(tail))
-                    {
-                        unsafe { self.emit_stmt(tail, &mut *locals, 0) };
-                    } else if k == pm_jit_rsx_ast_kind::BLOCK {
-                        /* tail block expr (typically an `unsafe { value }`
-                         * wrapper): walk to the inner tail and return it. */
-                        unsafe { self.emit_block_tail_ret(tail, &mut *locals) };
-                    } else {
-                        self.indent();
-                        self.out.puts(b"return \0".as_ptr());
-                        unsafe { self.emit_ret_value(tail, &mut *locals) };
-                        self.out.puts(b";\n\0".as_ptr());
-                    }
-                    /* any tail shape: live guards release before the fn's
-                     * closing brace (statement tails and diverging tails
-                     * both land here after their own emission). */
-                    unsafe { self.release_guards_all(&mut *locals) };
+                    let tail = unsafe { *bk.add(bn - 1) };
+                    unsafe { self.emit_fn_tail(tail, locals, ret_ct, ret_len) };
                 }
             } else {
                 unsafe { self.emit_block_stmt(body, &mut *locals) };
@@ -399,6 +365,21 @@ impl Lower {
         self.cur_body = core::ptr::null();
         self.out.puts(b"}\n\0".as_ptr());
         self.out.putc(b'\n');
+        /* flush: closure prototypes, closure defs, then the buffered fn
+         * text — the synthesized fns must precede the definition whose
+         * body names their designators. */
+        if declare_only == 0 && !body.is_null() {
+            unsafe { self.clo_lower_defs() };
+            self.out.swap(&mut self.fnbuf);
+            self.fnbuf_live = false;
+            /* monomorphized struct rows this body (or a synthesized
+             * closure/mono def) interned flush BEFORE the prototypes —
+             * a prototype or the body text may spell rsx_gp_<n> */
+            unsafe { self.gen_emit_rest() };
+            self.out.put(self.clo_proto.p, self.clo_proto.len);
+            self.out.put(self.clo_defs.p, self.clo_defs.len);
+            self.out.put(self.fnbuf.p, self.fnbuf.len);
+        }
     }
 
     /* Methods inside an impl: free fn `Type_method` / `Type_Trait_method`. */
@@ -2852,7 +2833,8 @@ impl Lower {
                     + self.res_pending_n()
                     + self.vec_pending_n()
                     + self.btm_pending_n()
-                    + self.arr_pending_n();
+                    + self.arr_pending_n()
+                    + self.gen_pending_n();
                 unsafe { self.tup_emit_rest() };
                 unsafe { self.fnp_emit_rest() };
                 unsafe { self.opt_emit_rest(0) };
@@ -2860,12 +2842,14 @@ impl Lower {
                 unsafe { self.vec_emit_rest(0) };
                 unsafe { self.btm_emit_rest(0) };
                 unsafe { self.arr_emit_rest(0) };
+                unsafe { self.gen_emit_rest() };
                 let after = self.tup_pending_n()
                     + self.opt_pending_n()
                     + self.res_pending_n()
                     + self.vec_pending_n()
                     + self.btm_pending_n()
-                    + self.arr_pending_n();
+                    + self.arr_pending_n()
+                    + self.gen_pending_n();
                 if after == before || rounds > 8 {
                     break;
                 }
@@ -3310,4 +3294,1087 @@ impl Lower {
         unsafe { self.out.puts(b";\n".as_ptr()) };
     }
 
+    /* ================= closures as values =================
+     *
+     * A capture-less closure used as a value lowers to a synthesized
+     * file-scope C fn (`static RET rsx_clo_<n>(..) { .. }`) whose
+     * designator the use site emits — a fn-ptr value in C. Prototypes and
+     * defs collect during the fn-body emission and flush ahead of that
+     * fn's buffered text. A closure that captures an outer binding
+     * refuses (`capturing closure as value`) — the synthesized fn is a
+     * plain C function with no environment slot. */
+
+    /* Per-body batch reset (the fn-text swap rides lower_fn). */
+    unsafe fn clo_begin(&mut self) {
+        self.clo_n = 0;
+        self.clo_at = 0;
+        self.clo_proto.len = 0;
+        self.clo_defs.len = 0;
+    }
+
+    /* CLOSURE kids carry `(TYPE? PARAM)*` then the body. Fills the
+     * name/annotation arrays; the bad flag (and a recorded refusal)
+     * covers shapes a synthesized plain C fn cannot carry — tuple-pattern
+     * (`|(a, b)|`) and by-ref (`|&b|`) params. Returns the param count. */
+    unsafe fn clo_params(
+        &mut self,
+        clo: *const pm_jit_rsx_ast_t,
+        names: *mut *const u8,
+        name_lens: *mut usize,
+        anns: *mut *const pm_jit_rsx_ast_t,
+        maxp: usize,
+        bad: *mut bool,
+    ) -> usize {
+        unsafe {
+            *bad = false;
+        }
+        let kids = unsafe { (*clo).kids };
+        let nk = unsafe { (*clo).n_kids } as usize;
+        let mut n = 0usize;
+        let mut ann: *const pm_jit_rsx_ast_t = core::ptr::null();
+        let mut i = 0usize;
+        while i + 1 < nk {
+            let k = unsafe { *kids.add(i) };
+            let kk = unsafe { (*k).kind };
+            if kk == pm_jit_rsx_ast_kind::TYPE {
+                ann = k;
+            } else if kk == pm_jit_rsx_ast_kind::PARAM {
+                if unsafe { (*k).n_kids } as usize > 0
+                    || unsafe { z_eq((*k).text, (*k).text_len, b"tup\0".as_ptr()) }
+                {
+                    unsafe {
+                        self.err(
+                            b"unsupported: closure parameter pattern\0".as_ptr(),
+                            (*k).line,
+                        );
+                    }
+                    unsafe {
+                        *bad = true;
+                    }
+                    return 0;
+                }
+                if n >= maxp {
+                    unsafe {
+                        self.err(
+                            b"unsupported: too many closure parameters\0".as_ptr(),
+                            (*k).line,
+                        );
+                    }
+                    unsafe {
+                        *bad = true;
+                    }
+                    return 0;
+                }
+                unsafe {
+                    *names.add(n) = (*k).text;
+                    *name_lens.add(n) = (*k).text_len;
+                    *anns.add(n) = ann;
+                }
+                ann = core::ptr::null();
+                n += 1;
+            }
+            i += 1;
+        }
+        n
+    }
+
+    /* Resolve the synthesized fn's C types into the caller's buffers
+     * (pcts has CLO_MAXP rows of 96): the expected fn-ptr TYPE node when
+     * the context knows one (a let's `: fn(..) -> R` ascription), else the
+     * closure's own `: T` annotations plus the body's inferred return
+     * (computed with the params visible). Returns the param count; 0 with
+     * bad set on a refusal. */
+    unsafe fn clo_sig(
+        &mut self,
+        clo: *const pm_jit_rsx_ast_t,
+        exp_ty: *const pm_jit_rsx_ast_t,
+        names: *mut *const u8,
+        name_lens: *mut usize,
+        pcts: *mut u8,
+        pct_lens: *mut usize,
+        ret_ct: *mut u8,
+        ret_len: *mut usize,
+        bad: *mut bool,
+    ) -> usize {
+        let line = unsafe { (*clo).line };
+        let mut anns: [*const pm_jit_rsx_ast_t; CLO_MAXP] = [core::ptr::null(); CLO_MAXP];
+        let np = unsafe {
+            self.clo_params(clo, names, name_lens, anns.as_mut_ptr(), CLO_MAXP, bad)
+        };
+        if unsafe { *bad } {
+            return 0;
+        }
+        if !exp_ty.is_null() {
+            /* fnptr TYPE node: quals.., param types..., ret (last) */
+            let kids = unsafe { (*exp_ty).kids };
+            let nk = unsafe { (*exp_ty).n_kids } as usize;
+            if nk == 0 {
+                unsafe {
+                    self.err(b"unsupported: closure type\0".as_ptr(), line);
+                }
+                unsafe {
+                    *bad = true;
+                }
+                return 0;
+            }
+            /* pass 1: the non-qual kids are the params plus the return */
+            let mut tot = 0usize;
+            let mut i = 0usize;
+            while i < nk {
+                let kt = unsafe { *kids.add(i) };
+                let mut is_qual = false;
+                if unsafe { (*kt).kind } == pm_jit_rsx_ast_kind::TYPE {
+                    let t = unsafe { (*kt).text };
+                    let tl = unsafe { (*kt).text_len };
+                    if unsafe { z_eq(t, tl, b"unsafe\0".as_ptr()) }
+                        || unsafe { z_eq(t, tl, b"extern\0".as_ptr()) }
+                    {
+                        is_qual = true;
+                    }
+                    if tl > 0 && unsafe { *t } == b'"' {
+                        is_qual = true;
+                    }
+                }
+                if !is_qual {
+                    tot += 1;
+                }
+                i += 1;
+            }
+            if tot == 0 {
+                unsafe {
+                    self.err(b"unsupported: closure type\0".as_ptr(), line);
+                }
+                unsafe {
+                    *bad = true;
+                }
+                return 0;
+            }
+            if tot - 1 != np {
+                unsafe {
+                    self.err(
+                        b"unsupported: closure parameter count mismatch\0".as_ptr(),
+                        line,
+                    );
+                }
+                unsafe {
+                    *bad = true;
+                }
+                return 0;
+            }
+            /* pass 2: render the params and the return */
+            let mut c = 0usize;
+            i = 0;
+            while i < nk {
+                let kt = unsafe { *kids.add(i) };
+                let mut is_qual = false;
+                if unsafe { (*kt).kind } == pm_jit_rsx_ast_kind::TYPE {
+                    let t = unsafe { (*kt).text };
+                    let tl = unsafe { (*kt).text_len };
+                    if unsafe { z_eq(t, tl, b"unsafe\0".as_ptr()) }
+                        || unsafe { z_eq(t, tl, b"extern\0".as_ptr()) }
+                    {
+                        is_qual = true;
+                    }
+                    if tl > 0 && unsafe { *t } == b'"' {
+                        is_qual = true;
+                    }
+                }
+                if !is_qual {
+                    if c == tot - 1 {
+                        let rn = unsafe { self.ctype(kt, ret_ct, 96) };
+                        if rn == 0 {
+                            unsafe {
+                                *bad = true;
+                            }
+                            return 0;
+                        }
+                        unsafe {
+                            *ret_len = rn;
+                        }
+                    } else {
+                        let pn = unsafe { self.ctype(kt, pcts.add(c * 96), 96) };
+                        if pn == 0 {
+                            unsafe {
+                                *bad = true;
+                            }
+                            return 0;
+                        }
+                        unsafe {
+                            *pct_lens.add(c) = pn;
+                        }
+                    }
+                    c += 1;
+                }
+                i += 1;
+            }
+            return np;
+        }
+        /* annotation path: every param needs its `: T` */
+        let mut i = 0usize;
+        while i < np {
+            let a = anns[i];
+            if a.is_null() {
+                unsafe {
+                    self.err(b"unsupported: untyped closure parameter\0".as_ptr(), line);
+                }
+                unsafe {
+                    *bad = true;
+                }
+                return 0;
+            }
+            let pn = unsafe { self.ctype(a, pcts.add(i * 96), 96) };
+            if pn == 0 {
+                unsafe {
+                    *bad = true;
+                }
+                return 0;
+            }
+            unsafe {
+                *pct_lens.add(i) = pn;
+            }
+            i += 1;
+        }
+        /* return: the body's own type, params visible. A block body
+         * carries its value in the tail (a `return e;` tail wraps e), so
+         * unwrap to the expression that actually produces the result
+         * before asking for its type. */
+        let kids = unsafe { (*clo).kids };
+        let nk = unsafe { (*clo).n_kids } as usize;
+        if nk == 0 {
+            unsafe {
+                *bad = true;
+            }
+            return 0;
+        }
+        let body = unsafe { *kids.add(nk - 1) };
+        let mut vb = body;
+        let mut hops = 0usize;
+        while hops < 6 && !vb.is_null() {
+            let vk = unsafe { (*vb).kind };
+            if vk == pm_jit_rsx_ast_kind::BLOCK {
+                let bk = unsafe { (*vb).kids };
+                let bn = unsafe { (*vb).n_kids } as usize;
+                if bn == 0 {
+                    break;
+                }
+                vb = unsafe { *bk.add(bn - 1) };
+                hops += 1;
+                continue;
+            }
+            if vk == pm_jit_rsx_ast_kind::EXPR_STMT
+                && unsafe { (*vb).n_kids } as usize >= 1
+            {
+                vb = unsafe { *(*vb).kids.add(0) };
+                hops += 1;
+                continue;
+            }
+            if vk == pm_jit_rsx_ast_kind::RETURN
+                && unsafe { (*vb).n_kids } as usize >= 1
+            {
+                vb = unsafe { *(*vb).kids.add(0) };
+                hops += 1;
+                continue;
+            }
+            break;
+        }
+        let loc2 = LocalTab::new(self.arena);
+        if loc2.is_null() {
+            self.ok = false;
+            unsafe {
+                *bad = true;
+            }
+            return 0;
+        }
+        i = 0;
+        while i < np {
+            unsafe {
+                (*loc2).add(
+                    *names.add(i),
+                    *name_lens.add(i),
+                    pcts.add(i * 96),
+                    *pct_lens.add(i),
+                    1,
+                );
+            }
+            i += 1;
+        }
+        let rn = unsafe { self.expr_ctype(vb, ret_ct, 96, loc2) };
+        unsafe {
+            pm_util_mem_free(self.arena, loc2 as *mut u8);
+        }
+        if rn == 0 {
+            unsafe {
+                self.err(b"unsupported: closure return inference\0".as_ptr(), line);
+            }
+            unsafe {
+                *bad = true;
+            }
+            return 0;
+        }
+        unsafe {
+            *ret_len = rn;
+        }
+        np
+    }
+
+    /* A closure in typed position (an unannotated `let g = |x: u8| ..`)
+     * renders as its C fn-pointer spelling `RET (*)(params)` — the same
+     * spelling the fnptr type arm builds, so emit_declarator places the
+     * name inside the parens. */
+    unsafe fn clo_type_of(
+        &mut self,
+        clo: *const pm_jit_rsx_ast_t,
+        out: *mut u8,
+        cap: usize,
+    ) -> usize {
+        let mut names: [*const u8; CLO_MAXP] = [core::ptr::null(); CLO_MAXP];
+        let mut name_lens: [usize; CLO_MAXP] = [0; CLO_MAXP];
+        let mut pcts: [[u8; 96]; CLO_MAXP] = [[0; 96]; CLO_MAXP];
+        let mut pct_lens: [usize; CLO_MAXP] = [0; CLO_MAXP];
+        let mut ret_ct: [u8; 96] = [0; 96];
+        let mut ret_len: usize = 0;
+        let mut bad = false;
+        let np = unsafe {
+            self.clo_sig(
+                clo,
+                core::ptr::null(),
+                names.as_mut_ptr(),
+                name_lens.as_mut_ptr(),
+                pcts[0].as_mut_ptr(),
+                pct_lens.as_mut_ptr(),
+                ret_ct.as_mut_ptr(),
+                &mut ret_len,
+                &mut bad,
+            )
+        };
+        if bad {
+            return 0;
+        }
+        let mut at = unsafe { bput(out, cap, 0, ret_ct.as_ptr(), ret_len) };
+        at = unsafe { bput(out, cap, at, b" (*)(\0".as_ptr(), 5) };
+        let mut first = true;
+        let mut i = 0usize;
+        while i < np {
+            if !first {
+                at = unsafe { bput(out, cap, at, b", \0".as_ptr(), 2) };
+            }
+            first = false;
+            at = unsafe { bput(out, cap, at, pcts[i].as_ptr(), pct_lens[i]) };
+            i += 1;
+        }
+        if first {
+            at = unsafe { bput(out, cap, at, b"void\0".as_ptr(), 4) };
+        }
+        at = unsafe { bput(out, cap, at, b")\0".as_ptr(), 1) };
+        if at >= cap {
+            return 0;
+        }
+        unsafe {
+            *out.add(at) = 0;
+        }
+        at
+    }
+
+    /* Synthesize the static fn for a capture-less closure used as a
+     * value. Returns the batch slot + 1 (0 = refused). The prototype
+     * appends to clo_proto; the def queues in the batch (drained at the
+     * end of the body, ahead of the buffered fn text). */
+    unsafe fn clo_synth(
+        &mut self,
+        clo: *const pm_jit_rsx_ast_t,
+        locals: *mut LocalTab,
+        exp_ty: *const pm_jit_rsx_ast_t,
+        line: u32,
+    ) -> usize {
+        if self.cur_body.is_null() {
+            unsafe {
+                self.err(b"unsupported: closure outside a function body\0".as_ptr(), line);
+            }
+            return 0;
+        }
+        if self.clo_n >= CLO_CAP {
+            unsafe {
+                self.err(b"unsupported: too many closures in one function\0".as_ptr(), line);
+            }
+            return 0;
+        }
+        if unsafe { self.clo_capture(clo, locals) } {
+            unsafe {
+                self.err(b"unsupported: capturing closure as value\0".as_ptr(), line);
+            }
+            return 0;
+        }
+        let mut names: [*const u8; CLO_MAXP] = [core::ptr::null(); CLO_MAXP];
+        let mut name_lens: [usize; CLO_MAXP] = [0; CLO_MAXP];
+        let mut pcts: [[u8; 96]; CLO_MAXP] = [[0; 96]; CLO_MAXP];
+        let mut pct_lens: [usize; CLO_MAXP] = [0; CLO_MAXP];
+        let mut ret_ct: [u8; 96] = [0; 96];
+        let mut ret_len: usize = 0;
+        let mut bad = false;
+        let np = unsafe {
+            self.clo_sig(
+                clo,
+                exp_ty,
+                names.as_mut_ptr(),
+                name_lens.as_mut_ptr(),
+                pcts[0].as_mut_ptr(),
+                pct_lens.as_mut_ptr(),
+                ret_ct.as_mut_ptr(),
+                &mut ret_len,
+                &mut bad,
+            )
+        };
+        if bad {
+            return 0;
+        }
+        let slot = self.clo_n;
+        /* name: rsx_clo_<unit counter> (never reset — file-scope names) */
+        let mut at = unsafe {
+            zput(self.clo_names[slot].as_mut_ptr(), 24, 0, b"rsx_clo_\0".as_ptr())
+        };
+        at += unsafe {
+            zput_num(
+                self.clo_names[slot].as_mut_ptr().add(at),
+                24 - at,
+                self.clo_ctr as u32,
+            )
+        };
+        self.clo_name_lens[slot] = at;
+        self.clo_ctr += 1;
+        self.clo_nodes[slot] = clo;
+        self.clo_nps[slot] = np;
+        self.clo_ret_lens[slot] = ret_len;
+        let mut j = 0usize;
+        while j < ret_len {
+            self.clo_rets[slot][j] = ret_ct[j];
+            j += 1;
+        }
+        let mut i = 0usize;
+        while i < np {
+            let mut w = 0usize;
+            while w < pct_lens[i] {
+                self.clo_pcts[slot * CLO_MAXP + i][w] = pcts[i][w];
+                w += 1;
+            }
+            self.clo_pct_lens[slot * CLO_MAXP + i] = pct_lens[i];
+            i += 1;
+        }
+        self.clo_n += 1;
+        /* prototype (emit_declarator renders fnptr/array params) */
+        self.out.swap(&mut self.clo_proto);
+        self.out.puts(b"static \0".as_ptr());
+        self.out.put(ret_ct.as_ptr(), ret_len);
+        self.out.putc(b' ');
+        self.out.put(self.clo_names[slot].as_ptr(), at);
+        self.out.putc(b'(');
+        let mut first = true;
+        i = 0;
+        while i < np {
+            if !first {
+                self.out.puts(b", \0".as_ptr());
+            }
+            first = false;
+            let pp = pcts[i].as_ptr();
+            let pl = pct_lens[i];
+            unsafe {
+                self.emit_declarator(pp, pl, names[i], name_lens[i]);
+            }
+            i += 1;
+        }
+        if first {
+            self.out.puts(b"void\0".as_ptr());
+        }
+        self.out.puts(b");\n\0".as_ptr());
+        self.out.swap(&mut self.clo_proto);
+        slot + 1
+    }
+
+    /* Drain the batch: lower every queued closure def (a nested value
+     * closure queues more — the loop sees the grown clo_n). */
+    unsafe fn clo_lower_defs(&mut self) {
+        while self.clo_at < self.clo_n {
+            let slot = self.clo_at;
+            self.clo_at += 1;
+            unsafe { self.clo_emit_def(slot) };
+        }
+    }
+
+    /* One synthesized definition: `static RET rsx_clo_<n>(..) { .. }`,
+     * buffered in clo_defs. The body lowers with a fresh param table and
+     * the fn-emission context (cur_ret carries the closure's return for
+     * `?` and the tail render). */
+    unsafe fn clo_emit_def(&mut self, slot: usize) {
+        let clo = self.clo_nodes[slot];
+        if clo.is_null() {
+            return;
+        }
+        let kids = unsafe { (*clo).kids };
+        let nk = unsafe { (*clo).n_kids } as usize;
+        if nk == 0 {
+            return;
+        }
+        let body = unsafe { *kids.add(nk - 1) };
+        let mut names: [*const u8; CLO_MAXP] = [core::ptr::null(); CLO_MAXP];
+        let mut name_lens: [usize; CLO_MAXP] = [0; CLO_MAXP];
+        let mut anns: [*const pm_jit_rsx_ast_t; CLO_MAXP] = [core::ptr::null(); CLO_MAXP];
+        let mut bad = false;
+        let np = unsafe {
+            self.clo_params(clo, names.as_mut_ptr(), name_lens.as_mut_ptr(), anns.as_mut_ptr(), CLO_MAXP, &mut bad)
+        };
+        if bad {
+            return;
+        }
+        let loc2 = LocalTab::new(self.arena);
+        if loc2.is_null() {
+            self.ok = false;
+            return;
+        }
+        let mut i = 0usize;
+        while i < np {
+            let pc = self.clo_pcts[slot * CLO_MAXP + i].as_ptr();
+            let pl = self.clo_pct_lens[slot * CLO_MAXP + i];
+            unsafe {
+                (*loc2).add(names[i], name_lens[i], pc, pl, 1);
+            }
+            i += 1;
+        }
+        let saved_ret: [u8; 128] = self.cur_ret;
+        let saved_ret_len = self.cur_ret_len;
+        let saved_body = self.cur_body;
+        let saved_depth = self.depth;
+        {
+            let rl = self.clo_ret_lens[slot];
+            let mut w = 0usize;
+            while w < rl && w < 127 {
+                self.cur_ret[w] = self.clo_rets[slot][w];
+                w += 1;
+            }
+            self.cur_ret_len = w;
+        }
+        self.cur_body = body;
+        self.depth = 1;
+        self.out.swap(&mut self.clo_defs);
+        self.out.puts(b"static \0".as_ptr());
+        self.out.put(self.clo_rets[slot].as_ptr(), self.clo_ret_lens[slot]);
+        self.out.putc(b' ');
+        self.out.put(self.clo_names[slot].as_ptr(), self.clo_name_lens[slot]);
+        self.out.putc(b'(');
+        let mut first = true;
+        i = 0;
+        while i < np {
+            if !first {
+                self.out.puts(b", \0".as_ptr());
+            }
+            first = false;
+            let pc = self.clo_pcts[slot * CLO_MAXP + i].as_ptr();
+            let pl = self.clo_pct_lens[slot * CLO_MAXP + i];
+            unsafe {
+                self.emit_declarator(pc, pl, names[i], name_lens[i]);
+            }
+            i += 1;
+        }
+        if first {
+            self.out.puts(b"void\0".as_ptr());
+        }
+        self.out.puts(b")\n{\n\0".as_ptr());
+        /* body: the same tail dispatch a fn body uses — statements plus
+         * the tail shape (control-flow tails, the minted `ret` temp for
+         * a tail match, `return` for a value tail). */
+        if unsafe { (*body).kind } == pm_jit_rsx_ast_kind::BLOCK {
+            let bk = unsafe { (*body).kids };
+            let bn = unsafe { (*body).n_kids } as usize;
+            i = 0;
+            while i + 1 < bn {
+                unsafe { self.emit_stmt(*bk.add(i), loc2, 0) };
+                i += 1;
+            }
+            if bn > 0 {
+                let tail = unsafe { *bk.add(bn - 1) };
+                let rct = self.clo_rets[slot].as_ptr();
+                let rln = self.clo_ret_lens[slot];
+                unsafe { self.emit_fn_tail(tail, loc2, rct, rln) };
+            }
+        } else {
+            self.indent();
+            self.out.puts(b"return \0".as_ptr());
+            unsafe { self.emit_ret_value(body, loc2) };
+            self.out.puts(b";\n\0".as_ptr());
+        }
+        self.out.puts(b"}\n\0".as_ptr());
+        self.out.putc(b'\n');
+        self.out.swap(&mut self.clo_defs);
+        self.cur_ret = saved_ret;
+        self.cur_ret_len = saved_ret_len;
+        self.cur_body = saved_body;
+        self.depth = saved_depth;
+        unsafe {
+            pm_util_mem_free(self.arena, loc2 as *mut u8);
+        }
+    }
+
+    /* ---- capture analysis ----
+     * Two walks over the closure subtree: clo_inner collects the names
+     * the closure binds itself (its params — nested closures' too —, let
+     * targets, for-loop vars, match-arm pattern binds); clo_uses then
+     * checks every name the body reads against the outer binding table.
+     * A hit is a capture; the synthesized static fn has no environment
+     * slot, so it refuses. Conservative by construction: a name the
+     * walks cannot classify reads as a capture (a refusal beats a wrong
+     * lowering). */
+
+    unsafe fn clo_set_add(
+        &mut self,
+        set: *mut u8,
+        set_lens: *mut usize,
+        nset: *mut usize,
+        name: *const u8,
+        nlen: usize,
+    ) -> bool {
+        if name.is_null() || nlen == 0 {
+            return true;
+        }
+        if nlen >= 48 {
+            /* unspellable in the fixed set — its uses resolve against the
+             * outer table alone (an over-refusal if it binds) */
+            return true;
+        }
+        if unsafe { z_eq(name, nlen, b"_\0".as_ptr()) } {
+            return true;
+        }
+        let n = unsafe { *nset };
+        if n >= 48 {
+            return false;
+        }
+        let mut s = 0usize;
+        while s < n {
+            if unsafe { *set_lens.add(s) == nlen } {
+                let mut same = true;
+                let mut j = 0usize;
+                while j < nlen {
+                    if unsafe { *set.add(s * 48 + j) != *name.add(j) } {
+                        same = false;
+                        break;
+                    }
+                    j += 1;
+                }
+                if same {
+                    return true;
+                }
+            }
+            s += 1;
+        }
+        let mut j = 0usize;
+        while j < nlen {
+            unsafe { *set.add(n * 48 + j) = *name.add(j) };
+            j += 1;
+        }
+        unsafe {
+            *set_lens.add(n) = nlen;
+            *nset = n + 1;
+        }
+        true
+    }
+
+    /* A pattern/ctor constant (`None`, `true`, `_`) is never a binder. */
+    unsafe fn clo_ctor_name(&mut self, t: *const u8, tl: usize) -> bool {
+        if t.is_null() {
+            return true;
+        }
+        if unsafe { z_eq(t, tl, b"None\0".as_ptr()) } {
+            return true;
+        }
+        if unsafe { z_eq(t, tl, b"Some\0".as_ptr()) } {
+            return true;
+        }
+        if unsafe { z_eq(t, tl, b"Ok\0".as_ptr()) } {
+            return true;
+        }
+        if unsafe { z_eq(t, tl, b"Err\0".as_ptr()) } {
+            return true;
+        }
+        if unsafe { z_eq(t, tl, b"true\0".as_ptr()) } {
+            return true;
+        }
+        if unsafe { z_eq(t, tl, b"false\0".as_ptr()) } {
+            return true;
+        }
+        if unsafe { z_eq(t, tl, b"_\0".as_ptr()) } {
+            return true;
+        }
+        false
+    }
+
+    /* Binder names under one pattern (or let-target) node. */
+    unsafe fn clo_pbind(
+        &mut self,
+        pat: *const pm_jit_rsx_ast_t,
+        set: *mut u8,
+        set_lens: *mut usize,
+        nset: *mut usize,
+    ) -> bool {
+        if pat.is_null() {
+            return true;
+        }
+        let k = unsafe { (*pat).kind };
+        let kids = unsafe { (*pat).kids };
+        let nk = unsafe { (*pat).n_kids } as usize;
+        if k == pm_jit_rsx_ast_kind::PATH {
+            let t = unsafe { (*pat).text };
+            let tl = unsafe { (*pat).text_len };
+            if nk == 0 {
+                if unsafe { self.clo_ctor_name(t, tl) } {
+                    return true;
+                }
+                return unsafe { self.clo_set_add(set, set_lens, nset, t, tl) };
+            }
+            /* `pat` node (Some/Ok/variant single-bind): the last kid is
+             * the bind, the earlier kids are ctor segments. */
+            if unsafe { z_eq(t, tl, b"pat\0".as_ptr()) } {
+                return unsafe { self.clo_pbind(*kids.add(nk - 1), set, set_lens, nset) };
+            }
+            if nk == 1 {
+                let only = unsafe { *kids.add(0) };
+                if unsafe { (*only).kind } == pm_jit_rsx_ast_kind::PATH
+                    && unsafe { (*only).n_kids } as usize == 0
+                {
+                    if unsafe { self.clo_ctor_name((*only).text, (*only).text_len) } {
+                        return true;
+                    }
+                    return unsafe {
+                        self.clo_set_add(set, set_lens, nset, (*only).text, (*only).text_len)
+                    };
+                }
+            }
+            /* struct pattern `S { a, b }`: PATH path [PATH S, STRUCT_LIT] —
+             * each field's value node is a binder. */
+            if nk >= 2 {
+                let last = unsafe { *kids.add(nk - 1) };
+                if unsafe { (*last).kind } == pm_jit_rsx_ast_kind::STRUCT_LIT {
+                    let sk = unsafe { (*last).kids };
+                    let sn = unsafe { (*last).n_kids } as usize;
+                    let mut i = 0usize;
+                    while i < sn {
+                        let f = unsafe { *sk.add(i) };
+                        if unsafe { (*f).kind } == pm_jit_rsx_ast_kind::STRUCT_FIELD && i + 1 < sn
+                        {
+                            if !unsafe {
+                                self.clo_pbind(*sk.add(i + 1), set, set_lens, nset)
+                            } {
+                                return false;
+                            }
+                        }
+                        i += 1;
+                    }
+                }
+            }
+            return true;
+        }
+        if k == pm_jit_rsx_ast_kind::TUPLE {
+            let mut i = 0usize;
+            while i < nk {
+                if !unsafe { self.clo_pbind(*kids.add(i), set, set_lens, nset) } {
+                    return false;
+                }
+                i += 1;
+            }
+        }
+        true
+    }
+
+    /* Collect every name the closure subtree binds itself. */
+    unsafe fn clo_inner(
+        &mut self,
+        e: *const pm_jit_rsx_ast_t,
+        set: *mut u8,
+        set_lens: *mut usize,
+        nset: *mut usize,
+    ) -> bool {
+        if e.is_null() {
+            return true;
+        }
+        let k = unsafe { (*e).kind };
+        let kids = unsafe { (*e).kids };
+        let nk = unsafe { (*e).n_kids } as usize;
+        if k == pm_jit_rsx_ast_kind::CLOSURE {
+            let mut i = 0usize;
+            while i < nk {
+                let p = unsafe { *kids.add(i) };
+                if unsafe { (*p).kind } == pm_jit_rsx_ast_kind::PARAM
+                    && unsafe { (*p).n_kids } as usize == 0
+                {
+                    if !unsafe {
+                        self.clo_set_add(set, set_lens, nset, (*p).text, (*p).text_len)
+                    } {
+                        return false;
+                    }
+                }
+                i += 1;
+            }
+        }
+        if k == pm_jit_rsx_ast_kind::LET || k == pm_jit_rsx_ast_kind::FOR {
+            if nk >= 1 {
+                if !unsafe { self.clo_pbind(*kids.add(0), set, set_lens, nset) } {
+                    return false;
+                }
+            }
+        }
+        if k == pm_jit_rsx_ast_kind::MATCH {
+            let mut i = 1usize;
+            while i < nk {
+                let arm = unsafe { *kids.add(i) };
+                if unsafe { (*arm).kind } == pm_jit_rsx_ast_kind::MATCH_ARM
+                    && unsafe { (*arm).n_kids } as usize >= 1
+                {
+                    let ak = unsafe { (*arm).kids };
+                    if !unsafe { self.clo_pbind(*ak.add(0), set, set_lens, nset) } {
+                        return false;
+                    }
+                }
+                i += 1;
+            }
+        }
+        let mut i = 0usize;
+        while i < nk {
+            if !unsafe { self.clo_inner(*kids.add(i), set, set_lens, nset) } {
+                return false;
+            }
+            i += 1;
+        }
+        true
+    }
+
+    /* Is this name a capture? (on the closure's own binder list or not an
+     * outer local at all — no; bound in the enclosing scopes — yes.) */
+    unsafe fn clo_name_live(
+        &mut self,
+        name: *const u8,
+        nlen: usize,
+        set: *mut u8,
+        set_lens: *mut usize,
+        nset: usize,
+        locals: *mut LocalTab,
+    ) -> bool {
+        if name.is_null() || nlen == 0 {
+            return false;
+        }
+        if unsafe { z_eq(name, nlen, b"_\0".as_ptr()) } {
+            return false;
+        }
+        let mut s = 0usize;
+        while s < nset {
+            if unsafe { *set_lens.add(s) == nlen } {
+                let mut same = true;
+                let mut j = 0usize;
+                while j < nlen {
+                    if unsafe { *set.add(s * 48 + j) != *name.add(j) } {
+                        same = false;
+                        break;
+                    }
+                    j += 1;
+                }
+                if same {
+                    return false;
+                }
+            }
+            s += 1;
+        }
+        if locals.is_null() {
+            return true;
+        }
+        let scratch = self.arena_tmp();
+        let n = unsafe { (*locals).lookup(name, nlen, scratch) };
+        n > 0
+    }
+
+    /* A macro's body is raw captured text — its identifiers are invisible
+     * to the AST walk, so scan every word against the outer bindings
+     * directly (string content included: an over-refusal there is safe, a
+     * missed read is not). */
+    unsafe fn clo_macro_scan(
+        &mut self,
+        text: *const u8,
+        text_len: usize,
+        set: *mut u8,
+        set_lens: *mut usize,
+        nset: usize,
+        locals: *mut LocalTab,
+    ) -> bool {
+        if text.is_null() {
+            return false;
+        }
+        if locals.is_null() {
+            return true;
+        }
+        let mut i = 0usize;
+        while i < text_len {
+            let c = unsafe { *text.add(i) };
+            let is_id = (c >= b'a' && c <= b'z')
+                || (c >= b'A' && c <= b'Z')
+                || c == b'_';
+            if is_id {
+                let st = i;
+                while i < text_len {
+                    let d = unsafe { *text.add(i) };
+                    let id2 = (d >= b'a' && d <= b'z')
+                        || (d >= b'A' && d <= b'Z')
+                        || (d >= b'0' && d <= b'9')
+                        || d == b'_';
+                    if !id2 {
+                        break;
+                    }
+                    i += 1;
+                }
+                if unsafe {
+                    self.clo_name_live(text.add(st), i - st, set, set_lens, nset, locals)
+                } {
+                    return true;
+                }
+                continue;
+            }
+            i += 1;
+        }
+        false
+    }
+
+    /* Walk the closure subtree for name reads; a read of an outer local
+     * (not one of the closure's own binders) is a capture. */
+    unsafe fn clo_uses(
+        &mut self,
+        e: *const pm_jit_rsx_ast_t,
+        set: *mut u8,
+        set_lens: *mut usize,
+        nset: usize,
+        locals: *mut LocalTab,
+    ) -> bool {
+        if e.is_null() {
+            return false;
+        }
+        let k = unsafe { (*e).kind };
+        if k == pm_jit_rsx_ast_kind::TYPE || k == pm_jit_rsx_ast_kind::LITERAL {
+            return false;
+        }
+        if k == pm_jit_rsx_ast_kind::MACRO {
+            return unsafe {
+                self.clo_macro_scan((*e).text, (*e).text_len, set, set_lens, nset, locals)
+            };
+        }
+        if k == pm_jit_rsx_ast_kind::PATH {
+            let kids = unsafe { (*e).kids };
+            let nk = unsafe { (*e).n_kids } as usize;
+            if nk == 0 {
+                return unsafe {
+                    self.clo_name_live((*e).text, (*e).text_len, set, set_lens, nset, locals)
+                };
+            }
+            /* a single bare segment is a name read; multi-segment paths
+             * (E::A, core::..) name types/modules; a STRUCT_LIT kid is a
+             * struct literal whose field values recurse below. */
+            if nk == 1 {
+                let only = unsafe { *kids.add(0) };
+                if unsafe { (*only).kind } == pm_jit_rsx_ast_kind::PATH
+                    && unsafe { (*only).n_kids } as usize == 0
+                {
+                    return unsafe {
+                        self.clo_name_live(
+                            (*only).text,
+                            (*only).text_len,
+                            set,
+                            set_lens,
+                            nset,
+                            locals,
+                        )
+                    };
+                }
+            }
+            let mut i = 0usize;
+            while i < nk {
+                let seg = unsafe { *kids.add(i) };
+                if unsafe { (*seg).kind } != pm_jit_rsx_ast_kind::PATH {
+                    if unsafe { self.clo_uses(seg, set, set_lens, nset, locals) } {
+                        return true;
+                    }
+                }
+                i += 1;
+            }
+            return false;
+        }
+        let kids = unsafe { (*e).kids };
+        let nk = unsafe { (*e).n_kids } as usize;
+        if k == pm_jit_rsx_ast_kind::METHOD_CALL {
+            /* kid 1 is the method name, never a name read */
+            let mut i = 0usize;
+            while i < nk {
+                if i != 1 {
+                    if unsafe { self.clo_uses(*kids.add(i), set, set_lens, nset, locals) } {
+                        return true;
+                    }
+                }
+                i += 1;
+            }
+            return false;
+        }
+        if k == pm_jit_rsx_ast_kind::MATCH {
+            /* kid 0 is the scrutinee; each arm's kid 0 is its pattern
+             * (binders, not reads) */
+            let mut i = 0usize;
+            while i < nk {
+                let arm = unsafe { *kids.add(i) };
+                if i == 0 {
+                    if unsafe { self.clo_uses(arm, set, set_lens, nset, locals) } {
+                        return true;
+                    }
+                } else {
+                    let ak = unsafe { (*arm).kids };
+                    let an = unsafe { (*arm).n_kids } as usize;
+                    let mut j = 1usize;
+                    while j < an {
+                        if unsafe { self.clo_uses(*ak.add(j), set, set_lens, nset, locals) } {
+                            return true;
+                        }
+                        j += 1;
+                    }
+                }
+                i += 1;
+            }
+            return false;
+        }
+        if k == pm_jit_rsx_ast_kind::LET || k == pm_jit_rsx_ast_kind::FOR {
+            /* kid 0 is the target/var (a binder) */
+            let mut i = 1usize;
+            while i < nk {
+                if unsafe { self.clo_uses(*kids.add(i), set, set_lens, nset, locals) } {
+                    return true;
+                }
+                i += 1;
+            }
+            return false;
+        }
+        let mut i = 0usize;
+        while i < nk {
+            if unsafe { self.clo_uses(*kids.add(i), set, set_lens, nset, locals) } {
+                return true;
+            }
+            i += 1;
+        }
+        false
+    }
+
+    /* The whole capture test: the closure's own binders never capture; a
+     * body read of any other in-scope local does. */
+    unsafe fn clo_capture(&mut self, clo: *const pm_jit_rsx_ast_t, locals: *mut LocalTab) -> bool {
+        let mut set: [[u8; 48]; 48] = [[0; 48]; 48];
+        let mut set_lens: [usize; 48] = [0; 48];
+        let mut nset: usize = 0;
+        if !unsafe {
+            self.clo_inner(clo, set[0].as_mut_ptr(), set_lens.as_mut_ptr(), &mut nset)
+        } {
+            return true;
+        }
+        if locals.is_null() {
+            return true;
+        }
+        unsafe {
+            self.clo_uses(clo, set[0].as_mut_ptr(), set_lens.as_mut_ptr(), nset, locals)
+        }
+    }
 }

@@ -90,6 +90,33 @@ struct Lower {
     nt_names: [[u8; 48]; NT_CAP],
     nt_lens: [usize; NT_CAP],
     nt_n: usize,
+    /* Generic struct defs (`Pair<T> { a: T, b: T }`) — collect registers
+     * the item pointer; the "generic" ATTR kid carries the type param
+     * names as NAME kids. Each use site with concrete args interns an
+     * instantiated row (rsx_gp_<row>): the layout registers in SymTab
+     * under the row name (field access reads it like any struct) and a
+     * typedef queues for gen_emit_rest (flushed with the opt rows). */
+    gen_names: [[u8; 48]; GEN_DEF_CAP],
+    gen_lens: [usize; GEN_DEF_CAP],
+    gen_items: [*mut pm_jit_rsx_ast_t; GEN_DEF_CAP],
+    gen_n: usize,
+    /* Instantiated rows: the defining struct + the args' C spellings */
+    gen_row_def: [usize; GEN_ROW_CAP],
+    gen_row_args: [[u8; GEN_ARGSZ]; GEN_ROW_CAP],
+    gen_row_argl: [[usize; GEN_MAXP]; GEN_ROW_CAP],
+    gen_row_nargs: [usize; GEN_ROW_CAP],
+    gen_row_done: [bool; GEN_ROW_CAP],
+    gen_row_emitted: [bool; GEN_ROW_CAP],
+    gen_row_n: usize,
+    /* Active substitution (param name -> arg C spelling) while a row's
+     * fields render — ctype's bare-name tail consults it. Flat arrays
+     * (GEN_MAXP slots of 24/64 bytes) so an enclosing render can save
+     * and restore the map with plain 1D copies. */
+    gen_sub_names: [u8; GEN_SUBSZ],
+    gen_sub_lens: [usize; GEN_MAXP],
+    gen_sub_cts: [u8; GEN_ARGSZ],
+    gen_sub_ctl: [usize; GEN_MAXP],
+    gen_sub_n: usize,
     /* #[derive(Default)] structs this unit: a per-struct C ctor
      * `_<name>_default(void)` is synthesized right after the struct's
      * typedef, and `X::default()` / `Self::default()` calls lower to it
@@ -271,6 +298,34 @@ struct Lower {
      * payload interns as an rsx_fnp_<row> name instead of the long
      * `RET (*)(..)` spelling. */
     in_opt_payload: bool,
+    /* ---- closures as values ----
+     * A capture-less closure used as a value lowers to a synthesized
+     * file-scope C fn (`static RET rsx_clo_<n>(..) { .. }`) whose
+     * designator the use site emits (a fn-ptr value in C). The defs and
+     * their prototypes collect in clo_defs/clo_proto during the fn-body
+     * emission and flush AHEAD of that fn's own text — the body text
+     * buffers in fnbuf (swapped over self.out for the body emission) so
+     * the synthesized fns can precede the definition that names them.
+     * Slots are per-fn batch (clo_n resets per body); the name counter
+     * clo_ctr is per-unit so file-scope names never collide. */
+    clo_ctr: usize,
+    clo_n: usize,
+    clo_at: usize,
+    clo_nodes: [*const pm_jit_rsx_ast_t; CLO_CAP],
+    clo_names: [[u8; 24]; CLO_CAP],
+    clo_name_lens: [usize; CLO_CAP],
+    clo_nps: [usize; CLO_CAP],
+    clo_rets: [[u8; 96]; CLO_CAP],
+    clo_ret_lens: [usize; CLO_CAP],
+    clo_pcts: [[u8; 96]; CLO_CAP * CLO_MAXP],
+    clo_pct_lens: [usize; CLO_CAP * CLO_MAXP],
+    clo_proto: Out,
+    clo_defs: Out,
+    fnbuf: Out,
+    /* true while self.out carries fn-text scratch (swapped over fnbuf) —
+     * a failed fn that returns early leaves the pair swapped; the next
+     * body re-anchors before it buffers its own text. */
+    fnbuf_live: bool,
 }
 
 impl Lower {
@@ -307,6 +362,9 @@ impl Lower {
             (*p).enumtags = EnumTagTab::new();
             (*p).arrs = ArrTab::new();
             (*p).maps = MapTab::new();
+            (*p).clo_proto = Out::new(arena);
+            (*p).clo_defs = Out::new(arena);
+            (*p).fnbuf = Out::new(arena);
         }
         p
     }
@@ -752,6 +810,16 @@ impl Lower {
             shr_closes: 0,
             feats: core::ptr::null(),
             hoist: Kids::new(),
+            mac_names: [[0; 48]; MAC_CAP],
+            mac_lens: [0; MAC_CAP],
+            mac_np: [0; MAC_CAP],
+            mac_pnames: [[0; 24]; MAC_CAP * MAC_PARAMS],
+            mac_plens: [0; MAC_CAP * MAC_PARAMS],
+            mac_pkinds: [0; MAC_CAP * MAC_PARAMS],
+            mac_body: [core::ptr::null(); MAC_CAP],
+            mac_blens: [0; MAC_CAP],
+            mac_n: 0,
+            mac_depth: 0,
         };
         /* element expression first */
         let elem = unsafe { p.parse_expr() };
@@ -995,6 +1063,16 @@ impl Lower {
             shr_closes: 0,
             feats: core::ptr::null(),
             hoist: Kids::new(),
+            mac_names: [[0; 48]; MAC_CAP],
+            mac_lens: [0; MAC_CAP],
+            mac_np: [0; MAC_CAP],
+            mac_pnames: [[0; 24]; MAC_CAP * MAC_PARAMS],
+            mac_plens: [0; MAC_CAP * MAC_PARAMS],
+            mac_pkinds: [0; MAC_CAP * MAC_PARAMS],
+            mac_body: [core::ptr::null(); MAC_CAP],
+            mac_blens: [0; MAC_CAP],
+            mac_n: 0,
+            mac_depth: 0,
         };
         if unsafe { p.kind(p.at) } != pm_jit_rsx_tok_kind::STRING_LITERAL {
             unsafe {
@@ -1119,6 +1197,16 @@ impl Lower {
                 shr_closes: 0,
                 feats: core::ptr::null(),
                 hoist: Kids::new(),
+                mac_names: [[0; 48]; MAC_CAP],
+                mac_lens: [0; MAC_CAP],
+                mac_np: [0; MAC_CAP],
+                mac_pnames: [[0; 24]; MAC_CAP * MAC_PARAMS],
+                mac_plens: [0; MAC_CAP * MAC_PARAMS],
+                mac_pkinds: [0; MAC_CAP * MAC_PARAMS],
+                mac_body: [core::ptr::null(); MAC_CAP],
+                mac_blens: [0; MAC_CAP],
+                mac_n: 0,
+                mac_depth: 0,
             };
             let cap = unsafe { ip2.parse_expr() };
             if !ip2.ok || cap.is_null() {
@@ -1269,6 +1357,16 @@ impl Lower {
             shr_closes: 0,
             feats: core::ptr::null(),
             hoist: Kids::new(),
+            mac_names: [[0; 48]; MAC_CAP],
+            mac_lens: [0; MAC_CAP],
+            mac_np: [0; MAC_CAP],
+            mac_pnames: [[0; 24]; MAC_CAP * MAC_PARAMS],
+            mac_plens: [0; MAC_CAP * MAC_PARAMS],
+            mac_pkinds: [0; MAC_CAP * MAC_PARAMS],
+            mac_body: [core::ptr::null(); MAC_CAP],
+            mac_blens: [0; MAC_CAP],
+            mac_n: 0,
+            mac_depth: 0,
         };
         /* arg 0: the sink */
         let sink = unsafe { p.parse_expr() };
@@ -1395,6 +1493,16 @@ impl Lower {
                 shr_closes: 0,
                 feats: core::ptr::null(),
                 hoist: Kids::new(),
+                mac_names: [[0; 48]; MAC_CAP],
+                mac_lens: [0; MAC_CAP],
+                mac_np: [0; MAC_CAP],
+                mac_pnames: [[0; 24]; MAC_CAP * MAC_PARAMS],
+                mac_plens: [0; MAC_CAP * MAC_PARAMS],
+                mac_pkinds: [0; MAC_CAP * MAC_PARAMS],
+                mac_body: [core::ptr::null(); MAC_CAP],
+                mac_blens: [0; MAC_CAP],
+                mac_n: 0,
+                mac_depth: 0,
             };
             let cap = unsafe { ip2.parse_expr() };
             if !ip2.ok || cap.is_null() {
@@ -1766,6 +1874,16 @@ impl Lower {
             shr_closes: 0,
             feats: core::ptr::null(),
             hoist: Kids::new(),
+            mac_names: [[0; 48]; MAC_CAP],
+            mac_lens: [0; MAC_CAP],
+            mac_np: [0; MAC_CAP],
+            mac_pnames: [[0; 24]; MAC_CAP * MAC_PARAMS],
+            mac_plens: [0; MAC_CAP * MAC_PARAMS],
+            mac_pkinds: [0; MAC_CAP * MAC_PARAMS],
+            mac_body: [core::ptr::null(); MAC_CAP],
+            mac_blens: [0; MAC_CAP],
+            mac_n: 0,
+            mac_depth: 0,
         };
         let mut got: [*mut pm_jit_rsx_ast_t; 3] = [core::ptr::null_mut(); 3];
         let mut n = 0usize;
@@ -2907,6 +3025,18 @@ impl Lower {
             }
             return if at >= cap { 0 } else { at };
         }
+        /* User generic struct (`Pair<T>`) — call-site monomorphized: the
+         * concrete args' C spellings intern a row (rsx_gp_<row>), the
+         * instantiated layout registers in SymTab under the row name and
+         * its typedef queues for gen_emit_rest. */
+        if unsafe { z_eq((*ty).text, (*ty).text_len, b"gpath\0".as_ptr()) }
+            && nk >= 2
+        {
+            let d = unsafe { self.gen_find(fname, flen) };
+            if d < GEN_DEF_CAP {
+                return unsafe { self.gen_instantiate(d, ty, garg, nk, out, cap) };
+            }
+        }
         /* Any other generic path (`Vec<T>`, `Box<T>`, `HashMap<K, V>`, …)
          * must refuse, not render its leaf: the old fall-through silently
          * took the last generic ARG as the type (`Vec<Export>` -> `Export`),
@@ -2935,6 +3065,25 @@ impl Lower {
             if prim > 0 {
                 return prim;
             }
+            /* a generic param under active substitution renders the
+             * concrete argument's C spelling (an instantiated row's
+             * field types render with the gen_sub map set) */
+            let gslot = unsafe { self.gen_sub_find(fname, flen) };
+            if gslot < GEN_MAXP {
+                let gl = self.gen_sub_ctl[gslot];
+                if gl == 0 || gl >= cap {
+                    return 0;
+                }
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        self.gen_sub_cts.as_ptr().add(gslot * 64),
+                        out,
+                        gl,
+                    );
+                    *out.add(gl) = 0;
+                }
+                return gl;
+            }
             /* unknown name: either a type this unit declares (checked when
              * the emit passes run) or an opaque extern type — record it so
              * the preamble can hoist `typedef struct X X;` for the latter. */
@@ -2961,6 +3110,655 @@ impl Lower {
         at
     }
 
+    /* ---- generic structs: defs and monomorphized rows ---- */
+
+    /* Def index by name; GEN_DEF_CAP when absent. */
+    unsafe fn gen_find(&self, name: *const u8, len: usize) -> usize {
+        let mut s = 0usize;
+        while s < self.gen_n {
+            if self.gen_lens[s] == len {
+                let mut i = 0usize;
+                let mut same = true;
+                while i < len {
+                    if self.gen_names[s][i] != unsafe { *name.add(i) } {
+                        same = false;
+                        break;
+                    }
+                    i += 1;
+                }
+                if same {
+                    return s;
+                }
+            }
+            s += 1;
+        }
+        GEN_DEF_CAP
+    }
+
+    /* Register a generic struct def (collect); idempotent across passes. */
+    unsafe fn gen_def_add(
+        &mut self,
+        name: *const u8,
+        len: usize,
+        item: *mut pm_jit_rsx_ast_t,
+    ) {
+        if self.gen_find(name, len) < GEN_DEF_CAP {
+            return;
+        }
+        if self.gen_n >= GEN_DEF_CAP || len > 48 {
+            unsafe {
+                self.err(b"unsupported: too many generic structs\0".as_ptr(), (*item).line);
+            }
+            return;
+        }
+        let s = self.gen_n;
+        let mut i = 0usize;
+        while i < len {
+            self.gen_names[s][i] = unsafe { *name.add(i) };
+            i += 1;
+        }
+        self.gen_lens[s] = len;
+        self.gen_items[s] = item;
+        self.gen_n += 1;
+    }
+
+    /* Substitution slot for a param name; GEN_MAXP when absent. */
+    unsafe fn gen_sub_find(&self, name: *const u8, len: usize) -> usize {
+        let mut s = 0usize;
+        while s < self.gen_sub_n {
+            if self.gen_sub_lens[s] == len {
+                let mut i = 0usize;
+                let mut same = true;
+                while i < len {
+                    if self.gen_sub_names[s * 24 + i] != unsafe { *name.add(i) } {
+                        same = false;
+                        break;
+                    }
+                    i += 1;
+                }
+                if same {
+                    return s;
+                }
+            }
+            s += 1;
+        }
+        GEN_MAXP
+    }
+
+    /* Row name `rsx_gp_<row>` into out (NUL-terminated); 0 = too long. */
+    unsafe fn gen_name_for(row: usize, out: *mut u8, cap: usize) -> usize {
+        let mut at = 0usize;
+        at = unsafe { bput(out, cap, at, b"rsx_gp_\0".as_ptr(), 7) };
+        let mut digs: [u8; 10] = [0; 10];
+        let mut nd = 0usize;
+        let mut v = row;
+        if v == 0 {
+            digs[0] = b'0';
+            nd = 1;
+        } else {
+            while v > 0 && nd < 10 {
+                digs[nd] = b'0' + (v % 10) as u8;
+                v /= 10;
+                nd += 1;
+            }
+        }
+        let mut q = nd;
+        while q > 0 {
+            q -= 1;
+            at = unsafe { bput(out, cap, at, &digs[q], 1) };
+        }
+        unsafe {
+            if at < cap {
+                *out.add(at) = 0;
+            } else if cap > 0 {
+                *out.add(cap - 1) = 0;
+                return 0;
+            }
+        }
+        at
+    }
+
+    /* Type-param names of a generic def from its "generic" ATTR kids —
+     * flat (GEN_SUBSZ bytes, 24/name) so callers keep 1D buffers. */
+    unsafe fn gen_params(&self, d: usize, pnames: *mut u8, pnamesl: *mut usize) -> usize {
+        let item = self.gen_items[d];
+        let mut pn = 0usize;
+        let ikids = unsafe { (*item).kids };
+        let ink = unsafe { (*item).n_kids } as usize;
+        let mut mi = 0usize;
+        while mi < ink {
+            let k = unsafe { *ikids.add(mi) };
+            if unsafe { (*k).kind } == pm_jit_rsx_ast_kind::ATTR
+                && unsafe { (*k).text_len } == 7
+                && unsafe { z_eq((*k).text, 7, b"generic\0".as_ptr()) }
+            {
+                let mk = unsafe { (*k).kids };
+                let mn = unsafe { (*k).n_kids } as usize;
+                let mut q = 0usize;
+                while q < mn && pn < GEN_MAXP {
+                    let nn = unsafe { *mk.add(q) };
+                    let nt = unsafe { (*nn).text };
+                    let nl = unsafe { (*nn).text_len };
+                    if nl > 0 && nl <= 24 {
+                        let mut c = 0usize;
+                        while c < nl {
+                            unsafe {
+                                *pnames.add(pn * 24 + c) = *nt.add(c);
+                            }
+                            c += 1;
+                        }
+                        unsafe {
+                            *pnamesl.add(pn) = nl;
+                        }
+                        pn += 1;
+                    }
+                    q += 1;
+                }
+            }
+            mi += 1;
+        }
+        pn
+    }
+
+    /* Row name for a generic struct LITERAL (`Pair { a: 1u8, b: 2u8 }`):
+     * the generic args infer from the field values' C types — a field
+     * whose declared type is a bare type param T binds T to the value's
+     * ctype, and every field binding one param must agree. 0 = cannot
+     * infer (the caller refuses — never a silent wrong row). */
+    unsafe fn gen_lit_row(
+        &mut self,
+        lit: *const pm_jit_rsx_ast_t,
+        tname: *const u8,
+        tlen: usize,
+        locals: *mut LocalTab,
+        out: *mut u8,
+        cap: usize,
+    ) -> usize {
+        let d = unsafe { self.gen_find(tname, tlen) };
+        if d >= GEN_DEF_CAP {
+            return 0;
+        }
+        let item = self.gen_items[d];
+        let mut pnames: [u8; GEN_SUBSZ] = [0; GEN_SUBSZ];
+        let mut pnamesl: [usize; GEN_MAXP] = [0; GEN_MAXP];
+        let pn = unsafe { self.gen_params(d, pnames.as_mut_ptr(), pnamesl.as_mut_ptr()) };
+        if pn == 0 {
+            return 0;
+        }
+        /* the STRUCT_LIT node (PATH-wrapped or bare) */
+        let mut sl: *const pm_jit_rsx_ast_t = core::ptr::null();
+        {
+            let kids = unsafe { (*lit).kids };
+            let nk = unsafe { (*lit).n_kids } as usize;
+            if unsafe { (*lit).kind } == pm_jit_rsx_ast_kind::PATH {
+                let mut i = 0usize;
+                while i < nk {
+                    let k = unsafe { *kids.add(i) };
+                    if unsafe { (*k).kind } == pm_jit_rsx_ast_kind::STRUCT_LIT {
+                        sl = k;
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            if sl.is_null() && unsafe { (*lit).kind } == pm_jit_rsx_ast_kind::STRUCT_LIT {
+                sl = lit;
+            }
+        }
+        if sl.is_null() {
+            return 0;
+        }
+        let mut argct: [u8; GEN_ARGSZ] = [0; GEN_ARGSZ];
+        let mut argl: [usize; GEN_MAXP] = [0; GEN_MAXP];
+        let mut have: [bool; GEN_MAXP] = [false; GEN_MAXP];
+        /* literal fields: alternating STRUCT_FIELD, value */
+        let fk = unsafe { (*sl).kids };
+        let fkn = unsafe { (*sl).n_kids } as usize;
+        let iks = unsafe { (*item).kids };
+        let ikn = unsafe { (*item).n_kids } as usize;
+        let mut j = 0usize;
+        while j + 1 < fkn {
+            let fnode = unsafe { *fk.add(j) };
+            if unsafe { (*fnode).kind } != pm_jit_rsx_ast_kind::STRUCT_FIELD {
+                j += 2;
+                continue;
+            }
+            let fname = unsafe { (*fnode).text };
+            let flen = unsafe { (*fnode).text_len };
+            let v = unsafe { *fk.add(j + 1) };
+            j += 2;
+            if flen == 2 && unsafe { z_eq(fname, 2, b"..\0".as_ptr()) } {
+                /* `..base` update: the base supplies nothing inferable
+                 * here — the ascription path must spell the args */
+                return 0;
+            }
+            /* the declared field type in the def: a bare param name? */
+            let mut q: usize = GEN_MAXP;
+            let mut m = 0usize;
+            while m < ikn {
+                let f = unsafe { *iks.add(m) };
+                if unsafe { (*f).kind } == pm_jit_rsx_ast_kind::STRUCT_FIELD
+                    && unsafe { (*f).text_len } == flen
+                    && !fname.is_null()
+                    && unsafe { (*f).n_kids } as usize >= 1
+                {
+                    /* byte compare, NOT z_eq: fname is a source span */
+                    let ft = unsafe { (*f).text };
+                    let mut same = true;
+                    let mut c2 = 0usize;
+                    while c2 < flen {
+                        if unsafe { *ft.add(c2) } != unsafe { *fname.add(c2) } {
+                            same = false;
+                            break;
+                        }
+                        c2 += 1;
+                    }
+                    if !same {
+                        m += 1;
+                        continue;
+                    }
+                    let fty = unsafe { *(*f).kids.add(0) };
+                    let tkn = unsafe { (*fty).n_kids } as usize;
+                    if tkn == 1 {
+                        let tk = unsafe { (*fty).kids };
+                        let seg = unsafe { *tk.add(0) };
+                        let sn = unsafe { (*seg).text };
+                        let snl = unsafe { (*seg).text_len };
+                        let mut p2 = 0usize;
+                        while p2 < pn {
+                            if pnamesl[p2] == snl
+                                && unsafe { z_eq(sn, snl, pnames.as_ptr().add(p2 * 24)) }
+                            {
+                                q = p2;
+                                break;
+                            }
+                            p2 += 1;
+                        }
+                    }
+                    break;
+                }
+                m += 1;
+            }
+            if q >= GEN_MAXP {
+                /* nested-param field (`Vec<T>`) or unknown field — this
+                 * field binds nothing */
+                continue;
+            }
+            let vb = self.arena_tmp();
+            let vl = unsafe { self.expr_ctype(v, vb, 128, locals) };
+            if vl == 0 || vl > 63 {
+                return 0;
+            }
+            if have[q] {
+                if argl[q] != vl {
+                    return 0;
+                }
+                let mut c = 0usize;
+                while c < vl {
+                    if argct[q * 64 + c] != unsafe { *vb.add(c) } {
+                        return 0;
+                    }
+                    c += 1;
+                }
+            } else {
+                let mut c = 0usize;
+                while c < vl {
+                    argct[q * 64 + c] = unsafe { *vb.add(c) };
+                    c += 1;
+                }
+                argl[q] = vl;
+                have[q] = true;
+            }
+        }
+        let mut p2 = 0usize;
+        while p2 < pn {
+            if !have[p2] {
+                return 0;
+            }
+            p2 += 1;
+        }
+        unsafe {
+            self.gen_row_cts(d, argct.as_ptr(), argl.as_ptr(), pn, (*lit).line, out, cap)
+        }
+    }
+
+    /* Instantiate `Def<args>`: intern the row, register its layout in
+     * SymTab under the row name (once), render the row name into out.
+     * The active substitution (an enclosing row's fields rendering) is
+     * saved across the nested render. Returns the name length; 0 =
+     * refused (never a silent misrender). */
+    /* Monomorphized rows whose typedef is not emitted yet — the
+     * file-scope fixpoint's progress test (same contract as the
+     * container rows). */
+    unsafe fn gen_pending_n(&mut self) -> usize {
+        let mut c = 0usize;
+        let mut s = 0usize;
+        while s < self.gen_row_n {
+            if self.gen_row_done[s] && !self.gen_row_emitted[s] {
+                c += 1;
+            }
+            s += 1;
+        }
+        c
+    }
+
+    /* Emit every monomorphized struct row whose deps are complete:
+     * `typedef struct rsx_gp_N rsx_gp_N; struct rsx_gp_N { .. };` —
+     * fields read back from the SymTab layout gen_instantiate
+     * registered. A row naming an incomplete row/typedef self-defers
+     * (row_dep_pending) to the next flush round; the file-scope
+     * fixpoint and the per-fn hoist windows own the retries. */
+    unsafe fn gen_emit_rest(&mut self) {
+        if self.gen_row_n == 0 {
+            return;
+        }
+        let mut s = 0usize;
+        while s < self.gen_row_n {
+            if !self.gen_row_done[s] || self.gen_row_emitted[s] {
+                s += 1;
+                continue;
+            }
+            let tdn = self.arena_tmp();
+            let tn = unsafe { Lower::gen_name_for(s, tdn, 32) };
+            if tn == 0 {
+                s += 1;
+                continue;
+            }
+            let slot = unsafe { (*self.syms).find(tdn, tn) };
+            if slot >= SYM_CAP {
+                s += 1;
+                continue;
+            }
+            /* field names from the def item's STRUCT_FIELD kids (decl
+             * order), C types from the row's SymTab layout by name */
+            let d = self.gen_row_def[s];
+            let item = self.gen_items[d];
+            let ikids = unsafe { (*item).kids };
+            let ink = unsafe { (*item).n_kids } as usize;
+            /* dep gate + field render, one field at a time */
+            let mut pending = false;
+            let mut j = 0usize;
+            while j < ink {
+                let f = unsafe { *ikids.add(j) };
+                if unsafe { (*f).kind } != pm_jit_rsx_ast_kind::STRUCT_FIELD {
+                    j += 1;
+                    continue;
+                }
+                let fname = unsafe { (*f).text };
+                let flen = unsafe { (*f).text_len };
+                let cb = self.arena_tmp();
+                let clen = unsafe { (*self.syms).field_ctype(slot, fname, flen, cb) };
+                if clen == 0 {
+                    unsafe {
+                        self.err(b"internal: generic row field type\0".as_ptr(), 0);
+                    }
+                    return;
+                }
+                if unsafe { self.row_dep_pending(cb, clen) } {
+                    pending = true;
+                    break;
+                }
+                j += 1;
+            }
+            if pending {
+                s += 1;
+                continue;
+            }
+            self.out.puts(b"typedef struct \0".as_ptr());
+            self.out.put(tdn, tn);
+            self.out.putc(b' ');
+            self.out.put(tdn, tn);
+            self.out.puts(b";\n\0".as_ptr());
+            self.out.puts(b"struct \0".as_ptr());
+            self.out.put(tdn, tn);
+            self.out.puts(b" {\n\0".as_ptr());
+            j = 0;
+            while j < ink {
+                let f = unsafe { *ikids.add(j) };
+                if unsafe { (*f).kind } != pm_jit_rsx_ast_kind::STRUCT_FIELD {
+                    j += 1;
+                    continue;
+                }
+                let fname = unsafe { (*f).text };
+                let flen = unsafe { (*f).text_len };
+                let cb = self.arena_tmp();
+                let clen = unsafe { (*self.syms).field_ctype(slot, fname, flen, cb) };
+                self.out.puts(b"    \0".as_ptr());
+                unsafe {
+                    self.emit_declarator(cb, clen, fname, flen);
+                }
+                self.out.puts(b";\n\0".as_ptr());
+                j += 1;
+            }
+            self.out.puts(b"};\n\0".as_ptr());
+            self.gen_row_emitted[s] = true;
+            s += 1;
+        }
+    }
+
+    unsafe fn gen_instantiate(
+        &mut self,
+        d: usize,
+        ty: *const pm_jit_rsx_ast_t,
+        garg: usize,
+        nk: usize,
+        out: *mut u8,
+        cap: usize,
+    ) -> usize {
+        let kids = unsafe { (*ty).kids };
+        let nargs = nk - garg;
+        if nargs > GEN_MAXP {
+            unsafe {
+                self.err(b"generic parameter count mismatch\0".as_ptr(), (*ty).line);
+            }
+            return 0;
+        }
+        /* resolve each arg to its C spelling (under the OUTER map —
+         * `Pair2<Pair3<T>>` fields resolve T from the outer row; only
+         * the row's own field render swaps maps) */
+        let mut argct: [u8; GEN_ARGSZ] = [0; GEN_ARGSZ];
+        let mut argl: [usize; GEN_MAXP] = [0; GEN_MAXP];
+        let mut q = 0usize;
+        while q < nargs {
+            let arg = unsafe { *kids.add(garg + q) };
+            let ab = self.arena_tmp();
+            let an = unsafe { self.ctype(arg, ab, 128) };
+            if an == 0 || an > 63 {
+                unsafe {
+                    self.err(b"unsupported: generic argument type\0".as_ptr(), (*ty).line);
+                }
+                return 0;
+            }
+            let mut c = 0usize;
+            while c < an {
+                argct[q * 64 + c] = unsafe { *ab.add(c) };
+                c += 1;
+            }
+            argl[q] = an;
+            q += 1;
+        }
+        unsafe {
+            self.gen_row_cts(d, argct.as_ptr(), argl.as_ptr(), nargs, (*ty).line, out, cap)
+        }
+    }
+
+    /* The monomorph core shared by type paths and literal inference:
+     * intern the row for (def, args), register its layout in SymTab
+     * under the row name (once), render the row name into out. Returns
+     * the name length; 0 = refused (never a silent misrender). */
+    unsafe fn gen_row_cts(
+        &mut self,
+        d: usize,
+        argct: *const u8,
+        argl: *const usize,
+        nargs: usize,
+        line: u32,
+        out: *mut u8,
+        cap: usize,
+    ) -> usize {
+        let item = self.gen_items[d];
+        let mut pnames: [u8; GEN_SUBSZ] = [0; GEN_SUBSZ];
+        let mut pnamesl: [usize; GEN_MAXP] = [0; GEN_MAXP];
+        let pn = unsafe { self.gen_params(d, pnames.as_mut_ptr(), pnamesl.as_mut_ptr()) };
+        if pn == 0 {
+            unsafe {
+                self.err(b"internal: generic def without params\0".as_ptr(), line);
+            }
+            return 0;
+        }
+        if nargs != pn {
+            unsafe {
+                self.err(b"generic parameter count mismatch\0".as_ptr(), line);
+            }
+            return 0;
+        }
+        /* intern the row */
+        let mut row = self.gen_row_n;
+        let mut r = 0usize;
+        while r < self.gen_row_n {
+            if self.gen_row_def[r] == d && self.gen_row_nargs[r] == nargs {
+                let mut same = true;
+                let mut q2 = 0usize;
+                while q2 < nargs {
+                    let al = unsafe { *argl.add(q2) };
+                    if self.gen_row_argl[r][q2] != al {
+                        same = false;
+                        break;
+                    }
+                    let mut b = 0usize;
+                    while b < al {
+                        if self.gen_row_args[r][q2 * 64 + b] != unsafe { *argct.add(q2 * 64 + b) } {
+                            same = false;
+                            break;
+                        }
+                        b += 1;
+                    }
+                    if !same {
+                        break;
+                    }
+                    q2 += 1;
+                }
+                if same {
+                    row = r;
+                    break;
+                }
+            }
+            r += 1;
+        }
+        if row == self.gen_row_n {
+            if self.gen_row_n >= GEN_ROW_CAP {
+                unsafe {
+                    self.err(b"generic type table overflow\0".as_ptr(), line);
+                }
+                return 0;
+            }
+            self.gen_row_def[row] = d;
+            self.gen_row_nargs[row] = nargs;
+            let mut c = 0usize;
+            while c < nargs * 64 {
+                self.gen_row_args[row][c] = unsafe { *argct.add(c) };
+                c += 1;
+            }
+            let mut q2 = 0usize;
+            while q2 < nargs {
+                self.gen_row_argl[row][q2] = unsafe { *argl.add(q2) };
+                q2 += 1;
+            }
+            self.gen_row_n += 1;
+        }
+        let tdn = self.arena_tmp();
+        let tn = unsafe { Lower::gen_name_for(row, tdn, 32) };
+        if tn == 0 {
+            unsafe {
+                self.err(b"internal: generic row name\0".as_ptr(), line);
+            }
+            return 0;
+        }
+        if !self.gen_row_done[row] {
+            self.gen_row_done[row] = true;
+            /* the instantiated layout: one SymTab row under the row name
+             * (field access and literals read it like any struct) */
+            let s = unsafe { (*self.syms).add(tdn, tn) };
+            if s >= SYM_CAP {
+                unsafe {
+                    self.err(b"internal: generic row sym overflow\0".as_ptr(), line);
+                }
+                return 0;
+            }
+            /* swap in this row's substitution for the field render */
+            let sv_names: [u8; GEN_SUBSZ] = self.gen_sub_names;
+            let sv_cts: [u8; GEN_ARGSZ] = self.gen_sub_cts;
+            let sv_ctl: [usize; GEN_MAXP] = self.gen_sub_ctl;
+            let sv_n = self.gen_sub_n;
+            self.gen_sub_n = 0;
+            let mut q3 = 0usize;
+            while q3 < pn {
+                let mut c = 0usize;
+                while c < pnamesl[q3] {
+                    self.gen_sub_names[q3 * 24 + c] = pnames[q3 * 24 + c];
+                    c += 1;
+                }
+                self.gen_sub_lens[q3] = pnamesl[q3];
+                c = 0;
+                let al3 = unsafe { *argl.add(q3) };
+                while c < al3 {
+                    self.gen_sub_cts[q3 * 64 + c] = unsafe { *argct.add(q3 * 64 + c) };
+                    c += 1;
+                }
+                self.gen_sub_ctl[q3] = al3;
+                q3 += 1;
+            }
+            self.gen_sub_n = pn;
+            let ikids = unsafe { (*item).kids };
+            let ink = unsafe { (*item).n_kids } as usize;
+            let mut j = 0usize;
+            while j < ink {
+                let f = unsafe { *ikids.add(j) };
+                if unsafe { (*f).kind } == pm_jit_rsx_ast_kind::STRUCT_FIELD
+                    && unsafe { (*f).n_kids } as usize >= 1
+                {
+                    let fty = unsafe { *(*f).kids.add(0) };
+                    let cb = self.arena_tmp();
+                    let cn = unsafe { self.ctype(fty, cb, 128) };
+                    if cn == 0 {
+                        self.gen_sub_names = sv_names;
+                        self.gen_sub_cts = sv_cts;
+                        self.gen_sub_ctl = sv_ctl;
+                        self.gen_sub_n = sv_n;
+                        unsafe {
+                            self.err(b"unsupported: generic field type\0".as_ptr(), line);
+                        }
+                        return 0;
+                    }
+                    unsafe {
+                        (*self.syms).add_field(self.arena, s, (*f).text, (*f).text_len, cb, cn);
+                    }
+                }
+                j += 1;
+            }
+            self.gen_sub_names = sv_names;
+            self.gen_sub_cts = sv_cts;
+            self.gen_sub_ctl = sv_ctl;
+            self.gen_sub_n = sv_n;
+        }
+        let mut c = 0usize;
+        while c < tn && c + 1 < cap {
+            unsafe {
+                *out.add(c) = *tdn.add(c);
+            }
+            c += 1;
+        }
+        unsafe {
+            if c < cap {
+                *out.add(c) = 0;
+            } else if cap > 0 {
+                *out.add(cap - 1) = 0;
+                return 0;
+            }
+        }
+        c
+    }
+
     /* Collect struct/fn/enum info before emission. */
     unsafe fn collect(&mut self, file: *const pm_jit_rsx_ast_t) {
         let kids = unsafe { (*file).kids };
@@ -2978,6 +3776,12 @@ impl Lower {
                  * every emission pass, so pass-0 statics can already spell
                  * them) and stay out of syms — they are not structs in C. */
                 if unsafe { self.has_generic_marker(item) } {
+                    /* generic struct definitions land in the monomorph
+                     * table; concrete rows are interned when a gpath
+                     * instantiation (or a field render) needs one */
+                    unsafe {
+                        self.gen_def_add((*item).text, (*item).text_len, item);
+                    }
                     let ikids = unsafe { (*item).kids };
                     let inkn = unsafe { (*item).n_kids } as usize;
                     let mut nfields = 0usize;
@@ -4270,6 +5074,15 @@ impl Lower {
                                 zput(out, cap, 0, self.self_ty.as_ptr())
                             };
                             return if n3 >= cap { 0 } else { n3 };
+                        }
+                        /* generic struct literal: the monomorphized row
+                         * inferred from the field values (0 = cannot
+                         * infer — the caller's refusal fires) */
+                        if unsafe { self.gen_find(sname, slen) } < GEN_DEF_CAP {
+                            let rl = unsafe {
+                                self.gen_lit_row(e, sname, slen, locals, out, cap)
+                            };
+                            return if rl >= cap { 0 } else { rl };
                         }
                         let n2 = unsafe { zput(out, cap, 0, sname) };
                         return if n2 >= cap { 0 } else { n2 };

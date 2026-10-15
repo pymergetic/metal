@@ -442,6 +442,20 @@ struct Parser {
      * after the file's own items (the lower's item passes then see them
      * unchanged — prototypes, bodies, statics). */
     hoist: Kids,
+    /* macro_rules! definitions (textual substitution into expressions):
+     * name, fixed-arity params (`$x:expr` / `$x:ident` / `$x:literal`),
+     * body text. Expansion lexes the substituted text and sub-parses it
+     * as an expression (mac_depth gates recursion). */
+    mac_names: [[u8; 48]; MAC_CAP],
+    mac_lens: [usize; MAC_CAP],
+    mac_np: [usize; MAC_CAP],
+    mac_pnames: [[u8; 24]; MAC_CAP * MAC_PARAMS],
+    mac_plens: [usize; MAC_CAP * MAC_PARAMS],
+    mac_pkinds: [u8; MAC_CAP * MAC_PARAMS],
+    mac_body: [*const u8; MAC_CAP],
+    mac_blens: [usize; MAC_CAP],
+    mac_n: usize,
+    mac_depth: usize,
 }
 
 impl Parser {
@@ -1144,6 +1158,114 @@ impl Parser {
         n
     }
 
+    /* `S { a, b: x, .. }` in pattern position: a struct destructure. The
+     * node mirrors the struct literal's flat field layout — PATH
+     * "pstruct" kids = [PATH(S), STRUCT_FIELD(f), bind, ...] — but each
+     * field's value is a PATTERN (plain bind, `mut` bind, `_`, or a
+     * nested pattern), and a `..` marker records the unbound rest.
+     * `mut` is source-side only (the C locals are assignable). */
+    unsafe fn parse_struct_pattern(&mut self) -> *mut pm_jit_rsx_ast_t {
+        let line = unsafe { self.line(self.at) };
+        let name = unsafe { self.text(self.at) };
+        let nlen = unsafe { self.text_len(self.at) };
+        self.at += 2; /* name + `{` */
+        let mut kids = Kids::new();
+        let seg = unsafe { self.mk(pm_jit_rsx_ast_kind::PATH, line, name, nlen) };
+        unsafe {
+            kids.add(seg, self.arena);
+        }
+        loop {
+            if unsafe { self.is_punct(self.at, b'}') } {
+                self.at += 1;
+                break;
+            }
+            if !self.ok {
+                return core::ptr::null_mut();
+            }
+            if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::END {
+                unsafe {
+                    self.err(b"expected '}' in struct pattern before end of file\0".as_ptr());
+                }
+                return core::ptr::null_mut();
+            }
+            /* `..` rest marker — the trailing unbound fields */
+            if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::RANGE {
+                self.at += 1;
+                if unsafe { self.is_punct(self.at, b',') } {
+                    self.at += 1;
+                }
+                continue;
+            }
+            /* `S { mut a }` — skip the mut marker (binds are C locals) */
+            if unsafe { self.is_kw(self.at, b"mut\0".as_ptr()) } {
+                self.at += 1;
+            }
+            if unsafe { self.kind(self.at) } != pm_jit_rsx_tok_kind::IDENT {
+                unsafe {
+                    self.err(b"expected field name in struct pattern\0".as_ptr());
+                }
+                return core::ptr::null_mut();
+            }
+            let fl = unsafe { self.line(self.at) };
+            let fname = unsafe { self.text(self.at) };
+            let fname_len = unsafe { self.text_len(self.at) };
+            self.at += 1;
+            let fv = unsafe {
+                self.mk(pm_jit_rsx_ast_kind::STRUCT_FIELD, fl, fname, fname_len)
+            };
+            unsafe {
+                kids.add(fv, self.arena);
+            }
+            if unsafe { self.is_punct(self.at, b':') } {
+                self.at += 1;
+                let bind = unsafe { self.parse_pattern() };
+                if !self.ok || bind.is_null() {
+                    return core::ptr::null_mut();
+                }
+                unsafe {
+                    kids.add(bind, self.arena);
+                }
+            } else {
+                /* shorthand `S { a }` == `S { a: a }` — the bind wraps the
+                 * name leaf in the same PATH "path" shape parse_pattern
+                 * returns for `a: x`, so the lower unwraps one convention */
+                let leaf = unsafe {
+                    self.mk(pm_jit_rsx_ast_kind::PATH, fl, fname, fname_len)
+                };
+                let mut sk = Kids::new();
+                unsafe {
+                    sk.add(leaf, self.arena);
+                }
+                let bind = unsafe {
+                    self.mk(pm_jit_rsx_ast_kind::PATH, fl, b"path\0".as_ptr(), 4)
+                };
+                unsafe {
+                    self.set_kids(bind, &sk);
+                    kids.add(bind, self.arena);
+                }
+            }
+            if unsafe { self.is_punct(self.at, b',') } {
+                self.at += 1;
+                continue;
+            }
+            if unsafe { self.is_punct(self.at, b'}') } {
+                self.at += 1;
+                break;
+            }
+            unsafe {
+                self.err(b"expected ',' or '}' in struct pattern\0".as_ptr());
+            }
+            return core::ptr::null_mut();
+        }
+        let n = unsafe {
+            self.mk(pm_jit_rsx_ast_kind::PATH, line, b"pstruct\0".as_ptr(), 7)
+        };
+        unsafe {
+            self.set_kids(n, &kids);
+        }
+        n
+    }
+
     unsafe fn parse_pattern(&mut self) -> *mut pm_jit_rsx_ast_t {
         let line = unsafe { self.line(self.at) };
         let mut k = unsafe { self.kind(self.at) };
@@ -1321,28 +1443,63 @@ impl Parser {
         if k == pm_jit_rsx_tok_kind::IDENT {
             /* `_`, `None`, `Some(x)`, enum variants, plain bindings,
              * or-patterns of literals/variants. */
+            /* struct pattern `S { a, b }` / `S { a: x, .. }` — the
+             * pattern twin of a struct literal. Fields carry PATTERN
+             * values (plain binds, `mut` binds, `_`, nested patterns) and
+             * `..` marks the unbound rest. The node mirrors the literal's
+             * flat field layout: PATH "pstruct" kids = [PATH(S),
+             * STRUCT_FIELD(f), bind, ...]. Expressions keep
+             * parse_path_expr's STRUCT_LIT shape; only pattern position
+             * builds this node. */
+            if unsafe { self.kind(self.at + 1) } == pm_jit_rsx_tok_kind::PUNCT
+                && unsafe { self.is_punct(self.at + 1, b'{') }
+            {
+                return unsafe { self.parse_struct_pattern() };
+            }
             let mut kids = Kids::new();
             let first = unsafe { self.parse_path_expr() };
             unsafe {
                 kids.add(first, self.arena);
             }
             /* `Some(bind)` — the lower reads this as PATH kids [Some, bind]
-             * (the bind declared at the arm body top). Only the single-bind
-             * form: `Some((a, b))` and friends are tuple patterns, refused
-             * below as an unsupported pattern form via the inner parse. */
+             * (the bind declared at the arm body top). `P(a, b)` — the
+             * tuple-struct pattern — parses its comma-separated sub-
+             * patterns and carries them as PATH "ctor" kids [P, a, b]: the
+             * let destructure binds positionally from the struct's fields.
+             * Only the single-bind form keeps the "pat" shape (the
+             * Some/Ok/enumpays consumers read kids[1] as THE bind). */
             if unsafe { self.is_punct(self.at, b'(') } {
                 self.at += 1;
-                let inner = unsafe { self.parse_pattern() };
-                if !self.ok {
-                    return core::ptr::null_mut();
+                let mut binds = Kids::new();
+                if !unsafe { self.is_punct(self.at, b')') } {
+                    loop {
+                        let inner = unsafe { self.parse_pattern() };
+                        if !self.ok {
+                            return core::ptr::null_mut();
+                        }
+                        unsafe {
+                            binds.add(inner, self.arena);
+                        }
+                        if unsafe { self.is_punct(self.at, b',') } {
+                            self.at += 1;
+                            continue;
+                        }
+                        break;
+                    }
                 }
                 if !unsafe { self.is_punct(self.at, b')') } {
                     unsafe {
-                        self.err(b"expected ')' in Some(bind) pattern\0".as_ptr());
+                        self.err(b"expected ')' in constructor pattern\0".as_ptr());
                     }
                     return core::ptr::null_mut();
                 }
                 self.at += 1;
+                if binds.n == 0 {
+                    unsafe {
+                        self.err(b"unsupported: empty constructor pattern\0".as_ptr());
+                    }
+                    return core::ptr::null_mut();
+                }
                 /* unwrap the path wrapper: the pattern node's kids are the
                  * path SEGMENTS (text = Some), then the bind. */
                 let mut segs = Kids::new();
@@ -1362,6 +1519,35 @@ impl Parser {
                         segs.add(first, self.arena);
                     }
                 }
+                if binds.n > 1 {
+                    /* multi-bind `P(a, b)`: segments then every bind.
+                     * One segment only — the lower cannot split segments
+                     * from binds in a flat node (`foo::P(a, b)` refuses
+                     * rather than guessing). */
+                    if segs.n != 1 {
+                        unsafe {
+                            self.err(
+                                b"unsupported: multi-segment constructor pattern\0".as_ptr(),
+                            );
+                        }
+                        return core::ptr::null_mut();
+                    }
+                    let mut bi = 0usize;
+                    while bi < binds.n {
+                        unsafe {
+                            segs.add(binds.get(bi), self.arena);
+                        }
+                        bi += 1;
+                    }
+                    let n = unsafe {
+                        self.mk(pm_jit_rsx_ast_kind::PATH, line, b"ctor\0".as_ptr(), 4)
+                    };
+                    unsafe {
+                        self.set_kids(n, &segs);
+                    }
+                    return n;
+                }
+                let inner = unsafe { binds.get(0) };
                 unsafe {
                     segs.add(inner, self.arena);
                 }
@@ -2283,6 +2469,16 @@ impl Parser {
             return n;
         }
         if k == pm_jit_rsx_tok_kind::MACRO_INVOC {
+            /* a defined macro_rules! name expands here (textual
+             * substitution, sub-parsed as an expression) */
+            let me = unsafe { self.mac_expand(self.text(self.at), self.text_len(self.at)) };
+            if !me.is_null() {
+                self.at += 1;
+                return me;
+            }
+            if !self.ok {
+                return core::ptr::null_mut();
+            }
             /* Preserve the whole invocation text for the lowering pass. */
             let n = unsafe {
                 self.mk(
@@ -3121,6 +3317,16 @@ impl Parser {
          * can refuse expression macros BY NAME (a bare path parse would
          * strand the `!` and misreport "expected ';' after let"). */
         if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::MACRO_INVOC {
+            /* a defined macro_rules! name expands here (textual
+             * substitution, sub-parsed as an expression) */
+            let me = unsafe { self.mac_expand(self.text(self.at), self.text_len(self.at)) };
+            if !me.is_null() {
+                self.at += 1;
+                return me;
+            }
+            if !self.ok {
+                return core::ptr::null_mut();
+            }
             let m = unsafe {
                 self.mk(
                     pm_jit_rsx_ast_kind::MACRO,
@@ -3982,6 +4188,54 @@ impl Parser {
             }
             return unsafe { self.parse_let_rest(line, kids, all_some) };
         }
+        /* struct pattern `S { .. }` and constructor patterns `P(a, b)` /
+         * `Err(e)`: the full pattern parse (the match-arm shapes). Some/Ok
+         * (single bind) keeps its dedicated branch below (the let-else
+         * contract). */
+        if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::IDENT {
+            let nm = unsafe { self.text(self.at) };
+            let nl = unsafe { self.text_len(self.at) };
+            let is_some_ok = unsafe { z_eq(nm, nl, b"Some\0".as_ptr()) }
+                || unsafe { z_eq(nm, nl, b"Ok\0".as_ptr()) };
+            if !is_some_ok
+                && unsafe { self.kind(self.at + 1) } == pm_jit_rsx_tok_kind::PUNCT
+                && (unsafe { self.is_punct(self.at + 1, b'{') }
+                    || unsafe { self.is_punct(self.at + 1, b'(') })
+            {
+                let pat = unsafe { self.parse_pattern() };
+                if !self.ok || pat.is_null() {
+                    return core::ptr::null_mut();
+                }
+                /* a single-ctor `Err(e)` is refutable — the let-else
+                 * contract applies (its twins `Some(x)`/`Ok(v)` take the
+                 * dedicated branch below); `P(x)`/`P(a, b)`/`S { .. }`
+                 * destructure irrefutably. */
+                let mut refutable = false;
+                if unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH
+                    && unsafe { (*pat).text_len } == 3
+                    && !unsafe { (*pat).text }.is_null()
+                    && unsafe { z_eq((*pat).text, 3, b"pat\0".as_ptr()) }
+                {
+                    let hk = unsafe { (*pat).kids };
+                    if unsafe { (*pat).n_kids } as usize == 2 {
+                        let head = unsafe { *hk.add(0) };
+                        let ht = unsafe { (*head).text };
+                        let hl = unsafe { (*head).text_len };
+                        if unsafe { z_eq(ht, hl, b"Some\0".as_ptr()) }
+                            || unsafe { z_eq(ht, hl, b"Ok\0".as_ptr()) }
+                            || unsafe { z_eq(ht, hl, b"Err\0".as_ptr()) }
+                        {
+                            refutable = true;
+                        }
+                    }
+                }
+                let mut kids = Kids::new();
+                unsafe {
+                    kids.add(pat, self.arena);
+                }
+                return unsafe { self.parse_let_rest(line, kids, refutable) };
+            }
+        }
         /* pattern: ident, mut ident, `_`, or `Some(bind)` (single-bind —
          * the lower lowers it to a ._has test + inner decl). */
         let mut pat_name: *const u8 = b"_\0".as_ptr();
@@ -4107,6 +4361,17 @@ impl Parser {
             }
         }
         if els.is_null() {
+            if is_some_pat {
+                /* the Some/Ok/Err bind is refutable — without the
+                 * diverging else the None/Err arm would leave the bind
+                 * live with garbage. The old scan path declared a junk
+                 * local and emitted references to the unbound name; refuse
+                 * instead (the let-else form is the contract). */
+                unsafe {
+                    self.err(b"unsupported: constructor let without else\0".as_ptr());
+                }
+                return core::ptr::null_mut();
+            }
             if !unsafe { self.is_punct(self.at, b';') } {
                 unsafe {
                     self.err(b"expected ';' after let\0".as_ptr());
@@ -4403,7 +4668,12 @@ impl Parser {
      * and leaves `self.at` on the token after `>`. Bounds (`T: Send`) are
      * tokens like any other; a `<`/`>` imbalance is a parse error by the
      * caller (returns 0 without consuming). */
-    unsafe fn count_generic_params(&mut self) -> usize {
+    /* Consume the balanced `<..>` generic list; each top-level parameter
+     * name registers as a NAME kid of `names` (the caller attaches them
+     * to the "generic" marker so the lower can substitute field types).
+     * Bounds (`T: Clone`) and const params stay inert — only top-level
+     * idents before `:`/`=` count. Returns 0 on a malformed list. */
+    unsafe fn parse_generic_params(&mut self, names: &mut Kids) -> usize {
         if !unsafe { self.is_punct(self.at, b'<') } {
             return 0;
         }
@@ -4436,8 +4706,22 @@ impl Parser {
                 at_top = true;
                 self.at += 1;
                 continue;
-            } else if depth == 1 && at_top && unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::IDENT {
+            } else if depth == 1
+                && at_top
+                && unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::IDENT
+            {
+                let line = unsafe { self.line(self.at) };
+                let nm = unsafe { self.text(self.at) };
+                let nl = unsafe { self.text_len(self.at) };
+                let nn = unsafe {
+                    self.mk(pm_jit_rsx_ast_kind::PATH, line, nm, nl)
+                };
+                unsafe {
+                    names.add(nn, self.arena);
+                }
                 nparams += 1;
+                at_top = false;
+            } else if depth == 1 && unsafe { self.is_punct(self.at, b':') } {
                 at_top = false;
             }
             self.at += 1;
@@ -4465,19 +4749,16 @@ impl Parser {
         let name_len = unsafe { self.text_len(self.at) };
         self.at += 1;
         if unsafe { self.is_punct(self.at, b'<') } {
-            /* Generic parameter list on a struct (`SpinLock<T>`,
-             * `Mut<T>`): accepted when the struct is a single-field tuple
-             * form — the transparent-newtype case the lower knows — and
-             * refused otherwise (two fields would need real monomorphized
-             * C layout, which the subset does not define). Consume the
-             * balanced `<..>` as tokens; the param names are inert (the
-             * lower resolves `T` from the *use* site's generic arg). */
-            let nparams = unsafe { self.count_generic_params() };
+            /* Generic parameter list (`SpinLock<T>`, `Pair<T, U>`): the
+             * param names ride as NAME kids on the "generic" marker ATTR
+             * so the lower can substitute field types per instantiation.
+             * Consume the balanced `<..>` as tokens. */
+            let mut gnames = Kids::new();
+            let nparams = unsafe { self.parse_generic_params(&mut gnames) };
             if nparams == 0 {
                 return core::ptr::null_mut();
             }
-            /* Marker ATTR so the lower knows this item was generic (the
-             * param count is not needed later — the field count is). */
+            /* Marker ATTR so the lower knows this item was generic */
             let g = unsafe {
                 self.mk(
                     pm_jit_rsx_ast_kind::ATTR,
@@ -4487,6 +4768,7 @@ impl Parser {
                 )
             };
             unsafe {
+                self.set_kids(g, &gnames);
                 kids.add(g, self.arena);
             }
         }
@@ -5619,6 +5901,475 @@ impl Parser {
     }
 
     /* Top-level item dispatch. */
+    /* ---- macro_rules! (fixed-arity textual substitution) ---- */
+
+    unsafe fn mac_ws(&self, t: *const u8, n: usize, i0: usize) -> usize {
+        let mut i = i0;
+        while i < n {
+            let c = unsafe { *t.add(i) };
+            if c != b' ' && c != b'\n' && c != b'\t' && c != b'\r' {
+                break;
+            }
+            i += 1;
+        }
+        i
+    }
+
+    unsafe fn mac_isym(&self, c: u8) -> bool {
+        c == b'_'
+            || (c >= b'a' && c <= b'z')
+            || (c >= b'A' && c <= b'Z')
+            || (c >= b'0' && c <= b'9')
+    }
+
+    /* `macro_rules! name { ( $x:expr ) => { body } }` arrives as one
+     * MACRO_INVOC token; register it by scanning the text. Only one
+     * fixed-arity matcher of expr/ident/literal metavariables is
+     * accepted — anything else is REFUSED clearly. */
+    unsafe fn parse_macro_def(&mut self) {
+        let t = unsafe { self.text(self.at) };
+        let n = unsafe { self.text_len(self.at) };
+        if self.mac_n >= MAC_CAP {
+            unsafe {
+                self.err(b"unsupported: too many macro_rules\0".as_ptr());
+            }
+            return;
+        }
+        let mut i = unsafe { self.mac_ws(t, n, 12usize) };
+        let ns = i;
+        while i < n && unsafe { self.mac_isym(*t.add(i)) } {
+            i += 1;
+        }
+        if i == ns {
+            unsafe {
+                self.err(b"expected macro_rules! name\0".as_ptr());
+            }
+            return;
+        }
+        let m = self.mac_n;
+        let mut c = 0usize;
+        while c < i - ns && c < 48 {
+            self.mac_names[m][c] = unsafe { *t.add(ns + c) };
+            c += 1;
+        }
+        self.mac_lens[m] = c;
+        i = unsafe { self.mac_ws(t, n, i) };
+        if i >= n || unsafe { *t.add(i) } != b'{' {
+            unsafe {
+                self.err(b"unsupported: macro_rules! form\0".as_ptr());
+            }
+            return;
+        }
+        i += 1;
+        i = unsafe { self.mac_ws(t, n, i) };
+        if i >= n || unsafe { *t.add(i) } != b'(' {
+            unsafe {
+                self.err(b"unsupported: macro matcher form\0".as_ptr());
+            }
+            return;
+        }
+        i += 1;
+        let mut np = 0usize;
+        loop {
+            i = unsafe { self.mac_ws(t, n, i) };
+            if i < n && unsafe { *t.add(i) } == b')' {
+                i += 1;
+                break;
+            }
+            if i >= n || unsafe { *t.add(i) } != b'$' {
+                unsafe {
+                    self.err(b"unsupported: macro matcher form\0".as_ptr());
+                }
+                return;
+            }
+            i += 1;
+            let ps = i;
+            while i < n && unsafe { self.mac_isym(*t.add(i)) } {
+                i += 1;
+            }
+            if i == ps || np >= MAC_PARAMS {
+                unsafe {
+                    self.err(b"unsupported: macro matcher form\0".as_ptr());
+                }
+                return;
+            }
+            let slot = m * MAC_PARAMS + np;
+            let mut c2 = 0usize;
+            while c2 < i - ps && c2 < 24 {
+                self.mac_pnames[slot][c2] = unsafe { *t.add(ps + c2) };
+                c2 += 1;
+            }
+            self.mac_plens[slot] = c2;
+            if i >= n || unsafe { *t.add(i) } != b':' {
+                unsafe {
+                    self.err(b"unsupported: macro matcher form\0".as_ptr());
+                }
+                return;
+            }
+            i += 1;
+            let ks = i;
+            while i < n && unsafe { self.mac_isym(*t.add(i)) } {
+                i += 1;
+            }
+            let kl = i - ks;
+            let mut kindv: u8 = 0;
+            let mut kok = false;
+            if kl == 4 && unsafe { z_eq(t.add(ks), 4, b"expr\0".as_ptr()) } {
+                kok = true;
+            }
+            if kl == 5 && unsafe { z_eq(t.add(ks), 5, b"ident\0".as_ptr()) } {
+                kok = true;
+                kindv = 1;
+            }
+            if kl == 7 && unsafe { z_eq(t.add(ks), 7, b"literal\0".as_ptr()) } {
+                kok = true;
+                kindv = 2;
+            }
+            if !kok {
+                unsafe {
+                    self.err(b"unsupported: macro metavariable kind\0".as_ptr());
+                }
+                return;
+            }
+            self.mac_pkinds[slot] = kindv;
+            np += 1;
+            i = unsafe { self.mac_ws(t, n, i) };
+            if i < n && unsafe { *t.add(i) } == b',' {
+                i += 1;
+                continue;
+            }
+            if i < n && unsafe { *t.add(i) } == b')' {
+                i += 1;
+                break;
+            }
+            unsafe {
+                self.err(b"unsupported: macro matcher form\0".as_ptr());
+            }
+            return;
+        }
+        self.mac_np[m] = np;
+        i = unsafe { self.mac_ws(t, n, i) };
+        if i + 1 >= n || unsafe { *t.add(i) } != b'=' || unsafe { *t.add(i + 1) } != b'>' {
+            unsafe {
+                self.err(b"unsupported: macro_rules! form\0".as_ptr());
+            }
+            return;
+        }
+        i += 2;
+        i = unsafe { self.mac_ws(t, n, i) };
+        if i >= n || unsafe { *t.add(i) } != b'{' {
+            unsafe {
+                self.err(b"unsupported: macro_rules! form\0".as_ptr());
+            }
+            return;
+        }
+        i += 1;
+        let bs = i;
+        let mut depth = 1usize;
+        while i < n && depth > 0 {
+            let c = unsafe { *t.add(i) };
+            if c == b'{' {
+                depth += 1;
+            } else if c == b'}' {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            i += 1;
+        }
+        if depth != 0 {
+            unsafe {
+                self.err(b"unsupported: macro_rules! form\0".as_ptr());
+            }
+            return;
+        }
+        self.mac_body[m] = unsafe { t.add(bs) };
+        self.mac_blens[m] = i - bs;
+        self.mac_n += 1;
+    }
+
+    /* Expand `name!(args)` when `name` is a defined macro_rules!: fixed-
+     * arity textual substitution, then lex + sub-parse the expansion as
+     * an expression. NULL = not a defined macro (caller keeps the opaque
+     * MACRO node) or a refused expansion (self.ok is false — the abort
+     * carries the diagnostic; never a silent drop). */
+    unsafe fn mac_expand(&mut self, txt: *const u8, tlen: usize) -> *mut pm_jit_rsx_ast_t {
+        if self.mac_n == 0 {
+            return core::ptr::null_mut();
+        }
+        if self.mac_depth >= 4 {
+            unsafe {
+                self.err(b"unsupported: recursive macro\0".as_ptr());
+            }
+            return core::ptr::null_mut();
+        }
+        let mut nl = 0usize;
+        while nl < tlen && unsafe { *txt.add(nl) } != b'!' {
+            nl += 1;
+        }
+        if nl == 0 || nl >= tlen {
+            return core::ptr::null_mut();
+        }
+        let mut m = 0usize;
+        let mut found = false;
+        while m < self.mac_n {
+            if self.mac_lens[m] == nl {
+                let mut c = 0usize;
+                let mut same = true;
+                while c < nl {
+                    if self.mac_names[m][c] != unsafe { *txt.add(c) } {
+                        same = false;
+                        break;
+                    }
+                    c += 1;
+                }
+                if same {
+                    found = true;
+                    break;
+                }
+            }
+            m += 1;
+        }
+        if !found {
+            return core::ptr::null_mut();
+        }
+        let mut a0 = unsafe { self.mac_ws(txt, tlen, nl + 1) };
+        let mut a1 = tlen;
+        while a1 > a0 {
+            let c = unsafe { *txt.add(a1 - 1) };
+            if c != b' ' && c != b'\n' && c != b'\t' && c != b'\r' {
+                break;
+            }
+            a1 -= 1;
+        }
+        if a0 >= a1 || unsafe { *txt.add(a0) } != b'(' || unsafe { *txt.add(a1 - 1) } != b')' {
+            unsafe {
+                self.err(b"unsupported: macro invocation form\0".as_ptr());
+            }
+            return core::ptr::null_mut();
+        }
+        a0 += 1;
+        a1 -= 1;
+        /* split the args at top-level commas (brackets balance; string
+         * and char literals copy through unsplit) */
+        let mut args: [u8; 1024] = [0; 1024];
+        let mut alens: [usize; 4] = [0; 4];
+        let mut nargs = 0usize;
+        let mut start = a0;
+        let mut depth = 0i32;
+        let mut bad = false;
+        let mut i = a0;
+        while i < a1 {
+            let c = unsafe { *txt.add(i) };
+            if c == b'"' || c == b'\'' {
+                let q = c;
+                i += 1;
+                while i < a1 && unsafe { *txt.add(i) } != q {
+                    if unsafe { *txt.add(i) } == b'\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+                if i >= a1 {
+                    bad = true;
+                    break;
+                }
+                i += 1;
+                continue;
+            }
+            if c == b'(' || c == b'[' || c == b'{' {
+                depth += 1;
+            } else if c == b')' || c == b']' || c == b'}' {
+                depth -= 1;
+            } else if c == b',' && depth == 0 {
+                if nargs >= 4 {
+                    bad = true;
+                    break;
+                }
+                let s2 = unsafe { self.mac_ws(txt, tlen, start) };
+                let mut e2 = i;
+                while e2 > s2 {
+                    let cc = unsafe { *txt.add(e2 - 1) };
+                    if cc != b' ' && cc != b'\n' && cc != b'\t' && cc != b'\r' {
+                        break;
+                    }
+                    e2 -= 1;
+                }
+                let mut c2 = 0usize;
+                while c2 < e2 - s2 && c2 < 256 {
+                    args[nargs * 256 + c2] = unsafe { *txt.add(s2 + c2) };
+                    c2 += 1;
+                }
+                if c2 >= 256 {
+                    bad = true;
+                    break;
+                }
+                alens[nargs] = c2;
+                nargs += 1;
+                start = i + 1;
+            }
+            i += 1;
+        }
+        if bad {
+            unsafe {
+                self.err(b"unsupported: macro argument form\0".as_ptr());
+            }
+            return core::ptr::null_mut();
+        }
+        if start == a0 && a0 == a1 {
+            /* `name!()` with an empty matcher */
+        } else {
+            let s2 = unsafe { self.mac_ws(txt, tlen, start) };
+            let mut e2 = a1;
+            while e2 > s2 {
+                let cc = unsafe { *txt.add(e2 - 1) };
+                if cc != b' ' && cc != b'\n' && cc != b'\t' && cc != b'\r' {
+                    break;
+                }
+                e2 -= 1;
+            }
+            if nargs >= 4 {
+                unsafe {
+                    self.err(b"unsupported: macro argument form\0".as_ptr());
+                }
+                return core::ptr::null_mut();
+            }
+            let mut c2 = 0usize;
+            while c2 < e2 - s2 && c2 < 256 {
+                args[nargs * 256 + c2] = unsafe { *txt.add(s2 + c2) };
+                c2 += 1;
+            }
+            if c2 >= 256 {
+                unsafe {
+                    self.err(b"unsupported: macro argument form\0".as_ptr());
+                }
+                return core::ptr::null_mut();
+            }
+            alens[nargs] = c2;
+            nargs += 1;
+        }
+        if nargs != self.mac_np[m] {
+            unsafe {
+                self.err(b"macro argument count mismatch\0".as_ptr());
+            }
+            return core::ptr::null_mut();
+        }
+        /* substitute the body (string and char literals copy through
+         * untouched — `$` inside a literal is never a metavariable) */
+        let body = self.mac_body[m];
+        let blen = self.mac_blens[m];
+        let mut out = Out::new(self.arena);
+        let mut i2 = 0usize;
+        while i2 < blen {
+            let c = unsafe { *body.add(i2) };
+            if c == b'"' || c == b'\'' {
+                let q = c;
+                unsafe {
+                    out.putc(c);
+                }
+                i2 += 1;
+                while i2 < blen && unsafe { *body.add(i2) } != q {
+                    if unsafe { *body.add(i2) } == b'\\' && i2 + 1 < blen {
+                        unsafe {
+                            out.putc(b'\\');
+                        }
+                        i2 += 1;
+                    }
+                    unsafe {
+                        out.putc(*body.add(i2));
+                    }
+                    i2 += 1;
+                }
+                if i2 < blen {
+                    unsafe {
+                        out.putc(q);
+                    }
+                    i2 += 1;
+                }
+                continue;
+            }
+            if c == b'$' {
+                i2 += 1;
+                let ps = i2;
+                while i2 < blen && unsafe { self.mac_isym(*body.add(i2)) } {
+                    i2 += 1;
+                }
+                let pl = i2 - ps;
+                let mut p2 = 0usize;
+                let mut hit = false;
+                while p2 < self.mac_np[m] {
+                    let slot = m * MAC_PARAMS + p2;
+                    if self.mac_plens[slot] == pl && pl > 0 {
+                        let mut c2 = 0usize;
+                        let mut same = true;
+                        while c2 < pl {
+                            if self.mac_pnames[slot][c2] != unsafe { *body.add(ps + c2) } {
+                                same = false;
+                                break;
+                            }
+                            c2 += 1;
+                        }
+                        if same {
+                            /* parenthesize: a metavariable is a token
+                             * TREE, so `$x * $x` with `y + 1` must group
+                             * as `(y + 1) * (y + 1)` */
+                            unsafe {
+                                out.putc(b'(');
+                                out.put(args.as_ptr().add(p2 * 256), alens[p2]);
+                                out.putc(b')');
+                            }
+                            hit = true;
+                            break;
+                        }
+                    }
+                    p2 += 1;
+                }
+                if !hit {
+                    unsafe {
+                        self.err(b"unsupported: macro metavariable\0".as_ptr());
+                    }
+                    return core::ptr::null_mut();
+                }
+                continue;
+            }
+            unsafe {
+                out.putc(c);
+            }
+            i2 += 1;
+        }
+        /* lex + sub-parse the expansion as an expression */
+        let mut tlist: pm_jit_rsx_toklist_t =
+            pm_jit_rsx_toklist_t { toks: core::ptr::null_mut(), n_toks: 0 };
+        let rc = unsafe {
+            pm_metal_jit_rsx_lex(
+                self.arena,
+                out.p,
+                out.len,
+                &mut tlist,
+                self.nd.errbuf,
+                self.nd.errcap,
+            )
+        };
+        if rc != 0 {
+            self.ok = false;
+            return core::ptr::null_mut();
+        }
+        let sv_toks = self.toks;
+        let sv_n = self.n_toks;
+        let sv_at = self.at;
+        self.toks = tlist.toks;
+        self.n_toks = tlist.n_toks;
+        self.at = 0;
+        self.mac_depth += 1;
+        let e = unsafe { self.parse_expr() };
+        self.mac_depth -= 1;
+        self.toks = sv_toks;
+        self.n_toks = sv_n;
+        self.at = sv_at;
+        e
+    }
+
     unsafe fn parse_item(&mut self) -> *mut pm_jit_rsx_ast_t {
         let mut kids = Kids::new();
         unsafe {
@@ -5718,6 +6469,25 @@ impl Parser {
         }
         if unsafe { self.is_kw(self.at, b"trait\0".as_ptr()) } {
             return unsafe { self.parse_trait(&mut kids) };
+        }
+        /* `macro_rules! name { .. }` — one captured token; register the
+         * definition (text scan) and drop the item (the "cfgskip" shape
+         * parse_file already discards). */
+        if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::MACRO_INVOC {
+            let tlen = unsafe { self.text_len(self.at) };
+            if tlen > 12
+                && unsafe { z_eq(self.text(self.at), 11, b"macro_rules\0".as_ptr()) }
+                && unsafe { *self.text(self.at).add(11) } == b'!'
+            {
+                let line = unsafe { self.line(self.at) };
+                unsafe {
+                    self.parse_macro_def();
+                }
+                self.at += 1;
+                return unsafe {
+                    self.mk(pm_jit_rsx_ast_kind::STMT, line, b"cfgskip\0".as_ptr(), 7)
+                };
+            }
         }
         if unsafe { self.is_kw(self.at, b"macro_rules\0".as_ptr()) }
             || unsafe { self.is_kw(self.at, b"async\0".as_ptr()) }

@@ -469,6 +469,12 @@ impl Lower {
             if unsafe { self.nt_find(name, nlen) } {
                 return;
             }
+            /* multi-field (and named-field) generic defs emit no C here:
+             * every concrete use interns a monomorphized row whose
+             * typedef gen_emit_rest flushes before its users */
+            if unsafe { self.gen_find(name, nlen) } < GEN_DEF_CAP {
+                return;
+            }
             unsafe {
                 self.err(b"unsupported: generic struct needs monomorphized layout (only single-field newtypes are supported)\0".as_ptr(), line);
             }
@@ -580,6 +586,7 @@ impl Lower {
                 unsafe { self.btm_emit_rest(0) };
                 unsafe { self.arr_emit_rest(0) };
                 unsafe { self.tup_emit_rest() };
+                unsafe { self.gen_emit_rest() };
                 self.out.put(tag, tag_len);
                 self.out.putc(b' ');
                 self.out.put(name, nlen);
@@ -1806,6 +1813,7 @@ impl Lower {
          * the early flush is sound. */
         if self.types_done {
             unsafe { self.opt_emit_rest(0) };
+            unsafe { self.gen_emit_rest() };
         }
         /* &[T] rows need the same flush and must NOT wait for
          * types_done: pass-0a consts (`const X: &[u8] = b".."`) intern
@@ -2415,6 +2423,7 @@ impl Lower {
         }
         if self.types_done {
             unsafe { self.opt_emit_rest(0) };
+            unsafe { self.gen_emit_rest() };
         }
         i = 0;
         while i < nk {
