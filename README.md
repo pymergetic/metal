@@ -49,6 +49,16 @@ relocator, and the *linked* compiler's output is compared against gen-1 again
 The C++ card does the same with its own `__impl__.c`.
 `tools/selfhost_cycle.sh` is the single source of truth for the stages.
 
+`tools/selfhost_corpus/` is the living record of what the micro-rustc subset
+actually covers: every fixture compiles under **both** boot and self and must
+match its golden byte for byte, so a subset extension is only real once a
+fixture pins it. Recent reach — local `struct`/`union`/`enum`/`type`/`impl`
+items hoisted to TU scope (`nested_type_hoist`), and the Vec span fills a
+caller needs to cross buffers — `extend_from_slice`, `extend(repeat_n(..))`,
+and range `copy_from_slice` (`vec_span_fills`). A feed resolves `#[path]`-included
+faces with `selfhost_feed --splice <fqn>`, the same splice the build card runs
+in-kernel, so a single-file feed sees the same faces the unit path does.
+
 <p>
   <img src="screenshots/selfhost-fixpoint.png" alt="The self-host cycle: gen-2 equals gen-1 byte for byte, then the linked compiler's output matches gen-1 again" width="820" />
 </p>
