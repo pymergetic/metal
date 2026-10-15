@@ -1,6 +1,8 @@
 /* selfhost_feed.c — minimal driver for the micro-rustc self-host cycle.
  *
  * Feeds a .rs file through lex+parse+lower and writes the generated C.
+ * With --splice FQN it first runs the build card's `#[path]` splice over
+ * the source (real unit shapes: the face + its cross-card ABI faces).
  * With --object it then feeds that C to the kernel's own C compiler
  * (jit.c TCC card) and writes the object bytes.
  * With --link it goes one step further: the object is linked in-process
@@ -32,6 +34,7 @@ int main(int argc, char **argv) {
     int do_object = 0;
     int do_link = 0;
     int do_dump = 0;
+    const char *splice_fqn = NULL;
     const char *path;
     const char *out_path;
     FILE *f;
@@ -41,6 +44,8 @@ int main(int argc, char **argv) {
     pm_util_mem_arena_t *arena;
     pm_jit_rsx_toklist_t toks;
     pm_jit_rsx_ast_t *unit = NULL;
+    const char *lex_src;
+    size_t lex_n;
     char *c_out = NULL;
     size_t c_out_len = 0;
     char err[PM_METAL_JIT_RSX_ERR_MAX];
@@ -51,6 +56,10 @@ int main(int argc, char **argv) {
         if (strcmp(argv[argi], "--object") == 0) { do_object = 1; argi++; }
         else if (strcmp(argv[argi], "--link") == 0) { do_link = 1; argi++; }
         else if (strcmp(argv[argi], "--dump") == 0) { do_dump = 1; argi++; }
+        else if (strcmp(argv[argi], "--splice") == 0 && argi + 1 < argc) {
+            splice_fqn = argv[argi + 1];
+            argi += 2;
+        }
         else if (strcmp(argv[argi], "--") == 0)  { argi++; break; }
         else { fprintf(stderr, "unknown flag %s\n", argv[argi]); return 2; }
     }
@@ -63,6 +72,8 @@ int main(int argc, char **argv) {
     n = fread(src, 1, sizeof(src) - 1, f);
     fclose(f);
     src[n] = 0;
+    lex_src = src;
+    lex_n = n;
     printf("source: %zu bytes\n", n);
 
     backing = malloc(1u << 27);
@@ -76,9 +87,27 @@ int main(int argc, char **argv) {
      * simpler than a conditional boot. */
     if (pm_mod_boot_run(arena) != 0) { printf("BOOT REFUSED\n"); return 2; }
 
+    /* --splice FQN: resolve `#[path]`-included faces through the build
+     * card's own splice first — a probe feeds real unit shapes (the
+     * authored face + its cross-card ABI shapes) exactly as the kernel's
+     * unit compile assembles them. */
+    if (splice_fqn != NULL) {
+        char *sp = NULL;
+        memset(err, 0, sizeof(err));
+        rc = pm_metal_build_rs_splice(arena, splice_fqn, src, &sp,
+            err, sizeof(err));
+        if (rc != 0 || sp == NULL) {
+            printf("SPLICE REFUSED: %s\n", err);
+            return 1;
+        }
+        lex_src = sp;
+        lex_n = strlen(sp);
+        printf("spliced: %zu bytes\n", lex_n);
+    }
+
     memset(err, 0, sizeof(err));
     memset(&toks, 0, sizeof(toks));
-    rc = pm_metal_jit_rsx_lex(arena, src, n, &toks, err, sizeof(err));
+    rc = pm_metal_jit_rsx_lex(arena, lex_src, lex_n, &toks, err, sizeof(err));
     if (rc != 0) { printf("LEX REFUSED: %s\n", err); return 1; }
     printf("lex ok: %u tokens\n", toks.n_toks);
 

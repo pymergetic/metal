@@ -3746,7 +3746,8 @@ impl Parser {
                 && (unsafe { self.is_kw(self.at + 1, b"fn\0".as_ptr()) }
                     || unsafe { self.is_kw(self.at + 1, b"extern\0".as_ptr()) }
                     || unsafe { self.is_kw(self.at + 1, b"const\0".as_ptr()) }
-                    || unsafe { self.is_kw(self.at + 1, b"static\0".as_ptr()) });
+                    || unsafe { self.is_kw(self.at + 1, b"static\0".as_ptr()) }
+                    || unsafe { self.is_kw(self.at + 1, b"impl\0".as_ptr()) });
             let is_extern_item = unsafe { self.is_kw(self.at, b"extern\0".as_ptr()) }
                 && (unsafe { self.is_kw(self.at + 1, b"fn\0".as_ptr()) }
                     || unsafe { self.kind(self.at + 1) } == pm_jit_rsx_tok_kind::STRING_LITERAL
@@ -3758,6 +3759,11 @@ impl Parser {
             if unsafe { self.is_kw(self.at, b"fn\0".as_ptr()) }
                 || unsafe { self.is_kw(self.at, b"static\0".as_ptr()) }
                 || unsafe { self.is_kw(self.at, b"pub\0".as_ptr()) }
+                || unsafe { self.is_kw(self.at, b"struct\0".as_ptr()) }
+                || unsafe { self.is_kw(self.at, b"union\0".as_ptr()) }
+                || unsafe { self.is_kw(self.at, b"enum\0".as_ptr()) }
+                || unsafe { self.is_kw(self.at, b"type\0".as_ptr()) }
+                || unsafe { self.is_kw(self.at, b"impl\0".as_ptr()) }
                 || is_unsafe_item
                 || is_extern_item
                 || is_const_fn_item
@@ -3785,12 +3791,10 @@ impl Parser {
                     self.mk(pm_jit_rsx_ast_kind::STMT, line, b"usehold\0".as_ptr(), 7)
                 };
             }
-            let is_item_kw = unsafe { self.is_kw(self.at, b"struct\0".as_ptr()) }
-                || unsafe { self.is_kw(self.at, b"enum\0".as_ptr()) }
-                || unsafe { self.is_kw(self.at, b"impl\0".as_ptr()) }
-                || unsafe { self.is_kw(self.at, b"trait\0".as_ptr()) }
-                || unsafe { self.is_kw(self.at, b"mod\0".as_ptr()) }
-                || unsafe { self.is_kw(self.at, b"type\0".as_ptr()) };
+            /* Nested `trait`/`mod` still refuse: items that capture
+             * nothing from the body (struct/enum/type/impl) hoist above. */
+            let is_item_kw = unsafe { self.is_kw(self.at, b"trait\0".as_ptr()) }
+                || unsafe { self.is_kw(self.at, b"mod\0".as_ptr()) };
             if is_item_kw {
                 unsafe {
                     self.err(b"unsupported: nested item in fn body\0".as_ptr());

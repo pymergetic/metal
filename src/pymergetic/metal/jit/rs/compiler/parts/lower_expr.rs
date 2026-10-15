@@ -5310,9 +5310,20 @@ impl Lower {
             || (an == 0 && unsafe { z_eq(mname, mlen, b"sort\0".as_ptr()) })
             || (an == 0 && unsafe { z_eq(mname, mlen, b"dedup\0".as_ptr()) })
             || (an == 1 && unsafe { z_eq(mname, mlen, b"extend\0".as_ptr()) })
+            || (an == 1 && unsafe { z_eq(mname, mlen, b"extend_from_slice\0".as_ptr()) })
         {
             let rct = self.arena_tmp();
             let rctl = unsafe { self.expr_ctype(recv, rct, 128, locals) };
+            let mut rnb = 0usize;
+            if rctl > 6 && unsafe { z_eq(rct, 6, b"const \0".as_ptr()) } {
+                rnb = 6;
+            }
+            let mut rnl = rctl;
+            let mut rptr = false;
+            if rnl - rnb > 2 && unsafe { *rct.add(rnl - 1) } == b'*' {
+                rnl -= 2;
+                rptr = true;
+            }
             if rctl > 8 && rctl < 128 && unsafe { z_eq(rct, 8, b"rsx_vec_\0".as_ptr()) } {
                 /* the interned element spelling from the typedef name */
                 if an == 1 && unsafe { z_eq(mname, mlen, b"push\0".as_ptr()) } {
@@ -5348,8 +5359,11 @@ impl Lower {
                                 && unsafe { z_eq(ab, 9, b"rsx_str_t\0".as_ptr()) }
                             {
                                 self.str_ref_used = true;
-                                self.out.put(rct, rctl);
-                                self.out.puts(b"_push(&\0".as_ptr());
+                                self.out.put(rct.add(rnb), rnl - rnb);
+                                self.out.puts(b"_push(\0".as_ptr());
+                                if !rptr {
+                                    self.out.putc(b'&');
+                                }
                                 unsafe { self.emit_expr(recv, locals) };
                                 self.out.puts(b", (rsx_str_ref_t){ (\0".as_ptr());
                                 unsafe { self.emit_expr(inner, locals) };
@@ -5360,19 +5374,183 @@ impl Lower {
                             }
                         }
                     }
-                    self.out.put(rct, rctl);
-                    self.out.puts(b"_push(&\0".as_ptr());
+                    self.out.put(rct.add(rnb), rnl - rnb);
+                    self.out.puts(b"_push(\0".as_ptr());
+                                if !rptr {
+                                    self.out.putc(b'&');
+                                }
                     unsafe { self.emit_expr(recv, locals) };
                     self.out.puts(b", \0".as_ptr());
                     unsafe { self.emit_expr(*ak.add(0), locals) };
                     self.out.puts(b")\0".as_ptr());
                     return;
                 }
+                /* extend_from_slice(s): append every byte of a borrowed
+                 * slice or array. `&[T]` is the rsx_arr_<row> fat row
+                 * (.p/.n); `&[T; N]` is a pointer-to-array (sizeof
+                 * count). Both walk the elements through _push — the
+                 * same append the extend(vec) loop does, but the source
+                 * is a raw span rather than a Vec row. */
+                if an == 1
+                    && unsafe { z_eq(mname, mlen, b"extend_from_slice\0".as_ptr()) }
+                {
+                    let vb = self.arena_tmp();
+                    let vl = unsafe { self.expr_ctype(*ak.add(0), vb, 128, locals) };
+                    /* strip a leading `const ` before shape checks */
+                    let mut vbase = 0usize;
+                    if vl > 6 && unsafe { z_eq(vb, 6, b"const \0".as_ptr()) } {
+                        vbase = 6;
+                    }
+                    let mut vlen = vl;
+                    let mut behind = false;
+                    if vlen - vbase > 2 && unsafe { *vb.add(vlen - 1) } == b'*' {
+                        vlen -= 2;
+                        behind = true;
+                    }
+                    /* fat slice row: rsx_arr_<row> (by value or behind &) */
+                    let mut is_row = false;
+                    if vlen - vbase >= 8
+                        && unsafe { z_eq(vb.add(vbase), 8, b"rsx_arr_\0".as_ptr()) }
+                    {
+                        is_row = true;
+                    }
+                    /* pointer-to-array `T (*)[N]` or plain array `T [N]` */
+                    let mut is_arr_ptr = false;
+                    let mut is_arr_val = false;
+                    let mut q5 = 0usize;
+                    while q5 + 3 <= vlen {
+                        if unsafe { z_eq(vb.add(q5), 3, b"(*)\0".as_ptr()) } {
+                            is_arr_ptr = true;
+                            break;
+                        }
+                        q5 += 1;
+                    }
+                    if !is_arr_ptr && vlen > 0 && unsafe { *vb.add(vlen - 1) } == b']' {
+                        is_arr_val = true;
+                    }
+                    if is_row || is_arr_ptr || is_arr_val {
+                        /* length expr */
+                        self.out.puts(b"{ size_t _k; size_t _n = \0".as_ptr());
+                        if is_row {
+                            if behind {
+                                self.out.puts(b"(*\0".as_ptr());
+                                unsafe { self.emit_expr(*ak.add(0), locals) };
+                                self.out.puts(b").n\0".as_ptr());
+                            } else {
+                                self.out.puts(b"(\0".as_ptr());
+                                unsafe { self.emit_expr(*ak.add(0), locals) };
+                                self.out.puts(b").n\0".as_ptr());
+                            }
+                        } else {
+                            self.out.puts(b"sizeof(\0".as_ptr());
+                            if is_arr_ptr {
+                                self.out.puts(b"(*\0".as_ptr());
+                                unsafe { self.emit_expr(*ak.add(0), locals) };
+                                self.out.puts(b")\0".as_ptr());
+                            } else {
+                                unsafe { self.emit_expr(*ak.add(0), locals) };
+                            }
+                            self.out.puts(b") / sizeof(\0".as_ptr());
+                            if is_arr_ptr {
+                                self.out.puts(b"(*\0".as_ptr());
+                                unsafe { self.emit_expr(*ak.add(0), locals) };
+                                self.out.puts(b")[0]\0".as_ptr());
+                            } else {
+                                self.out.putc(b'(');
+                                unsafe { self.emit_expr(*ak.add(0), locals) };
+                                self.out.puts(b")[0]\0".as_ptr());
+                            }
+                            self.out.puts(b")\0".as_ptr());
+                        }
+                        self.out.puts(b"; for (_k = 0; _k < _n; _k++) { \0".as_ptr());
+                        self.out.put(rct.add(rnb), rnl - rnb);
+                        self.out.puts(b"_push(\0".as_ptr());
+                                if !rptr {
+                                    self.out.putc(b'&');
+                                }
+                        unsafe { self.emit_expr(recv, locals) };
+                        self.out.puts(b", \0".as_ptr());
+                        /* element expr */
+                        if is_row {
+                            if behind {
+                                self.out.puts(b"(*\0".as_ptr());
+                                unsafe { self.emit_expr(*ak.add(0), locals) };
+                                self.out.puts(b").p[_k]\0".as_ptr());
+                            } else {
+                                self.out.puts(b"(\0".as_ptr());
+                                unsafe { self.emit_expr(*ak.add(0), locals) };
+                                self.out.puts(b").p[_k]\0".as_ptr());
+                            }
+                        } else if is_arr_ptr {
+                            self.out.puts(b"(*\0".as_ptr());
+                            unsafe { self.emit_expr(*ak.add(0), locals) };
+                            self.out.puts(b")[_k]\0".as_ptr());
+                        } else {
+                            self.out.putc(b'(');
+                            unsafe { self.emit_expr(*ak.add(0), locals) };
+                            self.out.puts(b")[_k]\0".as_ptr());
+                        }
+                        self.out.puts(b"); } }\0".as_ptr());
+                        return;
+                    }
+                }
                 /* extend(vec): append every element of the arg row — a
                  * statement-expr loop of _push. The arg types as the
                  * same rsx_vec_<elem> row (checked; a mismatched row
                  * refuses below rather than miscompile). */
                 if an == 1 && unsafe { z_eq(mname, mlen, b"extend\0".as_ptr()) } {
+                    /* `extend(std::iter::repeat(v, n))` / `repeat_n(v, n)`:
+                     * a count/value generator rather than a collection —
+                     * emit the _push loop directly from its two args. */
+                    {
+                        let garg = unsafe { *ak.add(0) };
+                        if unsafe { (*garg).kind } == pm_jit_rsx_ast_kind::CALL {
+                            let gk = unsafe { (*garg).kids };
+                            let gn = unsafe { (*garg).n_kids } as usize;
+                            let gcal = unsafe { *gk.add(0) };
+                            let gargs = if gn >= 2 { unsafe { *gk.add(1) } } else { core::ptr::null_mut() };
+                            if !gargs.is_null()
+                                && unsafe { (*gcal).kind } == pm_jit_rsx_ast_kind::PATH
+                                && (unsafe { (*gcal).n_kids } as usize) == 3
+                            {
+                                let gck = unsafe { (*gcal).kids };
+                                let g0 = unsafe { *gck.add(0) };
+                                let g1 = unsafe { *gck.add(1) };
+                                let g2 = unsafe { *gck.add(2) };
+                                let is_rep = unsafe { z_eq((*g2).text, (*g2).text_len, b"repeat\0".as_ptr()) }
+                                    || unsafe { z_eq((*g2).text, (*g2).text_len, b"repeat_n\0".as_ptr()) };
+                                if is_rep
+                                    && unsafe { z_eq((*g0).text, (*g0).text_len, b"std\0".as_ptr()) }
+                                    && unsafe { z_eq((*g1).text, (*g1).text_len, b"iter\0".as_ptr()) }
+                                {
+                                    let rargs = unsafe { (*gargs).kids };
+                                    let rn = unsafe { (*gargs).n_kids } as usize;
+                                    let has_n = unsafe { z_eq((*g2).text, (*g2).text_len, b"repeat_n\0".as_ptr()) };
+                                    let val = unsafe { *rargs.add(0) };
+                                    self.out.puts(b"{ size_t _k; for (_k = 0; _k < \0".as_ptr());
+                                    if has_n && rn >= 2 {
+                                        unsafe { self.emit_expr(*rargs.add(1), locals) };
+                                    } else {
+                                        /* repeat(v): an unbounded stream has no
+                                         * C shape — refuse rather than guess. */
+                                        self.err(b"unsupported: extend(repeat(..)) without a count\0".as_ptr(), (*e).line);
+                                        return;
+                                    }
+                                    self.out.puts(b"; _k++) { \0".as_ptr());
+                                    self.out.put(rct.add(rnb), rnl - rnb);
+                                    self.out.puts(b"_push(\0".as_ptr());
+                                if !rptr {
+                                    self.out.putc(b'&');
+                                }
+                                    unsafe { self.emit_expr(recv, locals) };
+                                    self.out.puts(b", \0".as_ptr());
+                                    unsafe { self.emit_expr(val, locals) };
+                                    self.out.puts(b"); } }\0".as_ptr());
+                                    return;
+                                }
+                            }
+                        }
+                    }
                     let vb = self.arena_tmp();
                     let vl = unsafe { self.expr_ctype(*ak.add(0), vb, 128, locals) };
                     /* `&Vec<T>` (a `const rsx_vec_<row> *` param) auto-
@@ -5427,8 +5605,11 @@ impl Lower {
                         }
                         unsafe { self.emit_expr(*ak.add(0), locals) };
                         self.out.puts(b").n; _k++) { \0".as_ptr());
-                        self.out.put(rct, rctl);
-                        self.out.puts(b"_push(&\0".as_ptr());
+                        self.out.put(rct.add(rnb), rnl - rnb);
+                        self.out.puts(b"_push(\0".as_ptr());
+                                if !rptr {
+                                    self.out.putc(b'&');
+                                }
                         unsafe { self.emit_expr(recv, locals) };
                         self.out.puts(b", (\0".as_ptr());
                         if !row_ok {
@@ -5507,7 +5688,7 @@ impl Lower {
                     return;
                 }
                 if an == 0 && unsafe { z_eq(mname, mlen, b"free\0".as_ptr()) } {
-                    self.out.put(rct, rctl);
+                    self.out.put(rct.add(rnb), rnl - rnb);
                     self.out.puts(b"_free(&\0".as_ptr());
                     unsafe { self.emit_expr(recv, locals) };
                     self.out.puts(b")\0".as_ptr());
@@ -5589,10 +5770,18 @@ impl Lower {
         {
             let rct = self.arena_tmp();
             let rctl = unsafe { self.expr_ctype(recv, rct, 128, locals) };
+            let mut rnb = 0usize;
+            if rctl > 6 && unsafe { z_eq(rct, 6, b"const \0".as_ptr()) } {
+                rnb = 6;
+            }
+            let mut rnl = rctl;
+            if rnl - rnb > 2 && unsafe { *rct.add(rnl - 1) } == b'*' {
+                rnl -= 2;
+            }
             if rctl > 8 && rctl < 128 && unsafe { z_eq(rct, 8, b"rsx_btm_\0".as_ptr()) } {
                 if an == 2 && unsafe { z_eq(mname, mlen, b"insert\0".as_ptr()) } {
                     let row = self.btms.find_by_name(rct, rctl);
-                    self.out.put(rct, rctl);
+                    self.out.put(rct.add(rnb), rnl - rnb);
                     self.out.puts(b"_insert(&\0".as_ptr());
                     unsafe { self.emit_expr(recv, locals) };
                     self.out.puts(b", \0".as_ptr());
@@ -5604,7 +5793,7 @@ impl Lower {
                 }
                 if an == 1 && unsafe { z_eq(mname, mlen, b"get\0".as_ptr()) } {
                     let row = self.btms.find_by_name(rct, rctl);
-                    self.out.put(rct, rctl);
+                    self.out.put(rct.add(rnb), rnl - rnb);
                     self.out.puts(b"_get(&\0".as_ptr());
                     unsafe { self.emit_expr(recv, locals) };
                     self.out.puts(b", \0".as_ptr());
@@ -5617,7 +5806,7 @@ impl Lower {
                  * the caller inserts on NULL. */
                 if an == 1 && unsafe { z_eq(mname, mlen, b"entry\0".as_ptr()) } {
                     let row = self.btms.find_by_name(rct, rctl);
-                    self.out.put(rct, rctl);
+                    self.out.put(rct.add(rnb), rnl - rnb);
                     self.out.puts(b"_entry_raw(&\0".as_ptr());
                     unsafe { self.emit_expr(recv, locals) };
                     self.out.puts(b", \0".as_ptr());
@@ -5657,10 +5846,18 @@ impl Lower {
                     if (unsafe { (*margs).n_kids } as usize) == 1 {
                         let rct = self.arena_tmp();
                         let rctl = unsafe { self.expr_ctype(mrecv, rct, 128, locals) };
+                        let mut rnb = 0usize;
+                        if rctl > 6 && unsafe { z_eq(rct, 6, b"const \0".as_ptr()) } {
+                            rnb = 6;
+                        }
+                        let mut rnl = rctl;
+                        if rnl - rnb > 2 && unsafe { *rct.add(rnl - 1) } == b'*' {
+                            rnl -= 2;
+                        }
                         if rctl > 8 && rctl < 128 && unsafe { z_eq(rct, 8, b"rsx_btm_\0".as_ptr()) } {
                             let row = self.btms.find_by_name(rct, rctl);
                             let mk = unsafe { (*margs).kids };
-                            self.out.put(rct, rctl);
+                            self.out.put(rct.add(rnb), rnl - rnb);
                             self.out.puts(b"_entry(&\0".as_ptr());
                             unsafe { self.emit_expr(mrecv, locals) };
                             self.out.puts(b", \0".as_ptr());
@@ -5906,17 +6103,25 @@ impl Lower {
         if an == 0 && mlen == 5 && unsafe { z_eq(mname, mlen, b"clone\0".as_ptr()) } {
             let rct = self.arena_tmp();
             let rctl = unsafe { self.expr_ctype(recv, rct, 128, locals) };
+            let mut rnb = 0usize;
+            if rctl > 6 && unsafe { z_eq(rct, 6, b"const \0".as_ptr()) } {
+                rnb = 6;
+            }
+            let mut rnl = rctl;
+            if rnl - rnb > 2 && unsafe { *rct.add(rnl - 1) } == b'*' {
+                rnl -= 2;
+            }
             if rctl > 8 && rctl < 128 && unsafe { z_eq(rct, 8, b"rsx_opt_\0".as_ptr()) } {
                 let el = self.arena_tmp();
                 let ell = unsafe { Lower::opt_typedef_elem(rct, rctl, el, 128) };
                 if ell > 0 {
                     let is_str = ell == 9 && unsafe { z_eq(el, 9, b"rsx_str_t\0".as_ptr()) };
                     self.out.puts(b"({ \0".as_ptr());
-                    self.out.put(rct, rctl);
+                    self.out.put(rct.add(rnb), rnl - rnb);
                     self.out.puts(b" _c = \0".as_ptr());
                     unsafe { self.emit_expr(recv, locals) };
                     self.out.puts(b"; \0".as_ptr());
-                    self.out.put(rct, rctl);
+                    self.out.put(rct.add(rnb), rnl - rnb);
                     self.out.puts(b" _r; _r._has = _c._has; if (_c._has) { _r._v = \0".as_ptr());
                     if is_str {
                         self.out.puts(b"rsx_str_clone(&_c._v)\0".as_ptr());
@@ -6821,6 +7026,114 @@ impl Lower {
             }
         }
         /* .add(k) / .sub(k) / wrapping arithmetic on integers */
+        /* `dst[a..b].copy_from_slice(src)` — a range slice writes into
+         * the destination span. dst is a fixed array (INDEX on `T [N]`)
+         * or a fat slice row (`.p`); src is a slice row (`.p`). The
+         * destination range is authoritative for the byte count. */
+        if an == 1
+            && unsafe { z_eq(mname, mlen, b"copy_from_slice\0".as_ptr()) }
+            && unsafe { (*recv).kind } == pm_jit_rsx_ast_kind::INDEX
+            && (unsafe { (*recv).n_kids } as usize) >= 2
+        {
+            let rk = unsafe { (*recv).kids };
+            let rbase = unsafe { *rk.add(0) };
+            let rrange = unsafe { *rk.add(1) };
+            if unsafe { (*rrange).kind } == pm_jit_rsx_ast_kind::BINARY
+                && (unsafe { (*rrange).n_kids } as usize) >= 2
+                && unsafe { z_eq((*rrange).text, (*rrange).text_len, b"..\0".as_ptr()) }
+            {
+                let gk2 = unsafe { (*rrange).kids };
+                let lo = unsafe { *gk2.add(0) };
+                let hi = unsafe { *gk2.add(1) };
+                let bb = self.arena_tmp();
+                let bl = unsafe { self.expr_ctype(rbase, bb, 128, locals) };
+                let mut bbase = 0usize;
+                if bl > 6 && unsafe { z_eq(bb, 6, b"const \0".as_ptr()) } {
+                    bbase = 6;
+                }
+                let mut blen = bl;
+                let mut bbehind = false;
+                if blen - bbase > 2 && unsafe { *bb.add(blen - 1) } == b'*' {
+                    blen -= 2;
+                    bbehind = true;
+                }
+                let mut is_b_row = false;
+                if blen - bbase >= 8
+                    && unsafe { z_eq(bb.add(bbase), 8, b"rsx_arr_\0".as_ptr()) }
+                {
+                    is_b_row = true;
+                }
+                /* dest pointer */
+                self.out.puts(b"(void)memcpy(\0".as_ptr());
+                if is_b_row {
+                    if bbehind {
+                        self.out.puts(b"(*\0".as_ptr());
+                        unsafe { self.emit_expr(rbase, locals) };
+                        self.out.puts(b").p + (\0".as_ptr());
+                    } else {
+                        self.out.putc(b'(');
+                        unsafe { self.emit_expr(rbase, locals) };
+                        self.out.puts(b").p + (\0".as_ptr());
+                    }
+                    unsafe { self.emit_expr(lo, locals) };
+                    self.out.putc(b')');
+                } else {
+                    /* fixed array / pointer-to-element: &base[lo] */
+                    self.out.puts(b"&(\0".as_ptr());
+                    if bbehind {
+                        self.out.putc(b'*');
+                    }
+                    unsafe { self.emit_expr(rbase, locals) };
+                    self.out.puts(b")[\0".as_ptr());
+                    unsafe { self.emit_expr(lo, locals) };
+                    self.out.putc(b']');
+                }
+                self.out.putc(b',');
+                /* src pointer: slice row .p */
+                {
+                    let ab2 = self.arena_tmp();
+                    let al2 = unsafe { self.expr_ctype(*ak.add(0), ab2, 128, locals) };
+                    let mut abase = 0usize;
+                    if al2 > 6 && unsafe { z_eq(ab2, 6, b"const \0".as_ptr()) } {
+                        abase = 6;
+                    }
+                    let mut alen = al2;
+                    let mut abehind = false;
+                    if alen - abase > 2 && unsafe { *ab2.add(alen - 1) } == b'*' {
+                        alen -= 2;
+                        abehind = true;
+                    }
+                    let mut is_a_row = false;
+                    if alen - abase >= 8
+                        && unsafe { z_eq(ab2.add(abase), 8, b"rsx_arr_\0".as_ptr()) }
+                    {
+                        is_a_row = true;
+                    }
+                    if is_a_row {
+                        if abehind {
+                            self.out.puts(b"(*\0".as_ptr());
+                            unsafe { self.emit_expr(*ak.add(0), locals) };
+                            self.out.puts(b").p\0".as_ptr());
+                        } else {
+                            self.out.putc(b'(');
+                            unsafe { self.emit_expr(*ak.add(0), locals) };
+                            self.out.puts(b").p\0".as_ptr());
+                        }
+                    } else {
+                        /* raw pointer source */
+                        unsafe { self.emit_expr(*ak.add(0), locals) };
+                    }
+                }
+                self.out.putc(b',');
+                /* count: the destination range width (hi - lo) */
+                self.out.puts(b"(\0".as_ptr());
+                unsafe { self.emit_expr(hi, locals) };
+                self.out.puts(b") - (\0".as_ptr());
+                unsafe { self.emit_expr(lo, locals) };
+                self.out.puts(b"))\0".as_ptr());
+                return;
+            }
+        }
         if an == 1 && unsafe { z_eq(mname, mlen, b"add\0".as_ptr()) } {
             self.out.putc(b'(');
             unsafe { self.emit_expr(recv, locals) };

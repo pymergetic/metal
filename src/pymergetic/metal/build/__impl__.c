@@ -3115,6 +3115,28 @@ static char *rs_splice(pm_util_mem_arena_t *arena, const char *fqn,
     return buf;
 }
 
+/* Splice `#[path]`-included faces into one compilable unit — the same
+ * splice the kernel's unit compile runs, callable from the host probes
+ * (selfhost_feed --splice) so a probe feeds real unit shapes instead of
+ * a single authored face. Arena-allocated NUL-terminated source in *out. */
+int32_t pm_metal_build_rs_splice(pm_util_mem_arena_t *arena,
+    const char *fqn, const char *src, char **out, char *errbuf,
+    size_t errbuf_len) {
+    char *sp;
+
+    if (arena == NULL || fqn == NULL || src == NULL || out == NULL) {
+        err_set(errbuf, errbuf_len, "rs_splice: bad args", 0);
+        return PM_METAL_BUILD_ERR_PARSE;
+    }
+    *out = NULL;
+    sp = rs_splice(arena, fqn, src, errbuf, errbuf_len, NULL);
+    if (sp == NULL) {
+        return PM_METAL_BUILD_ERR_COMPILE;
+    }
+    *out = sp;
+    return PM_METAL_BUILD_OK;
+}
+
 /* One unit source to a TCC object, dispatching on the file extension:
  * .rs -> micro-rustc -> C -> TCC; .cpp/.cxx/.cc -> cpp lower -> C -> TCC;
  * .c direct; .h is not a TU (skipped, not an object). Refusals carry the
@@ -3926,6 +3948,9 @@ PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_link, pm_metal_build_link
         const size_t *, uint32_t, pm_metal_build_artifact_t *, char *, size_t));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_discover, pm_metal_build_discover,
     int32_t(pm_util_mem_arena_t *, pm_metal_build_unit_t **, uint32_t *,
+        char *, size_t));
+PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_rs_splice, pm_metal_build_rs_splice,
+    int32_t(pm_util_mem_arena_t *, const char *, const char *, char **,
         char *, size_t));
 PM_MOD_EXPORT_C(pymergetic.metal.build, pm_metal_build_unit_compile, pm_metal_build_unit_compile,
     int32_t(pm_util_mem_arena_t *, const pm_metal_build_unit_t *, const pm_metal_build_compile_opts_t *, pm_metal_build_artifact_t *, char *, size_t));
