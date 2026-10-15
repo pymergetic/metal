@@ -3,7 +3,9 @@ struct Lower {
     arena: *mut pm_util_mem_arena_t,
     out: Out,
     errbuf: *mut u8,
+    #[allow(dead_code)]
     errcap: usize,
+    #[allow(dead_code)]
     errline: u32,
     ok: bool,
     syms: *mut SymTab,
@@ -17,8 +19,11 @@ struct Lower {
     enumtags: EnumTagTab,
     depth: usize,
     /* the struct type currently being lowered (for method resolution) */
+    #[allow(dead_code)]
     cur_impl: [*const u8; 16],
+    #[allow(dead_code)]
     cur_impl_lens: [usize; 16],
+    #[allow(dead_code)]
     cur_impl_n: usize,
     /* method receiver: C type text of `self` while lowering a method body;
      * empty when lowering a free fn. */
@@ -309,18 +314,18 @@ impl Lower {
                  * (a truncated tail still reads fine — errbuf bounds hold).
                  * Runs on !ok too: the pass loops re-arm ok between items. */
                 let mut i = 0usize;
-                while i + 1 < self.errcap && unsafe { *self.errbuf.add(i) } != 0 {
+                while i + 1 < self.errcap && *self.errbuf.add(i) != 0 {
                     i += 1;
                 }
-                i = unsafe { zput(self.errbuf, self.errcap, i, b"; \0".as_ptr()) };
-                i = unsafe { zput(self.errbuf, self.errcap, i, msg) };
+                i =  zput(self.errbuf, self.errcap, i, b"; \0".as_ptr()) ;
+                i = zput(self.errbuf, self.errcap, i, msg);
                 if line != 0 {
-                    i = unsafe { zput(self.errbuf, self.errcap, i, b" at line \0".as_ptr()) };
-                    i += unsafe { zput_num(self.errbuf.add(i), self.errcap - i, line) };
+                    i = zput(self.errbuf, self.errcap, i, b" at line \0".as_ptr());
+                    i += zput_num(self.errbuf.add(i), self.errcap - i, line);
                 }
-                unsafe {
+                
                     *self.errbuf.add(i) = 0;
-                }
+                
             }
         }
         self.nerrs += 1;
@@ -343,53 +348,53 @@ impl Lower {
             } else if self.nerrs < 8 && !self.errbuf.is_null() && self.errcap > 2 {
                 /* batch: same append contract as err() — see there */
                 let mut i = 0usize;
-                while i + 1 < self.errcap && unsafe { *self.errbuf.add(i) } != 0 {
+                while i + 1 < self.errcap && *self.errbuf.add(i) != 0 {
                     i += 1;
                 }
-                i = unsafe { zput(self.errbuf, self.errcap, i, b"; \0".as_ptr()) };
-                i = unsafe { zput(self.errbuf, self.errcap, i, msg) };
+                i =  zput(self.errbuf, self.errcap, i, b"; \0".as_ptr()) ;
+                i = zput(self.errbuf, self.errcap, i, msg);
                 if line != 0 {
-                    i = unsafe { zput(self.errbuf, self.errcap, i, b" at line \0".as_ptr()) };
-                    i += unsafe { zput_num(self.errbuf.add(i), self.errcap - i, line) };
+                    i = zput(self.errbuf, self.errcap, i, b" at line \0".as_ptr());
+                    i += zput_num(self.errbuf.add(i), self.errcap - i, line);
                 }
                 if i < self.errcap {
-                    unsafe { *self.errbuf.add(i) = 0 };
+                    *self.errbuf.add(i) = 0;
                 }
             }
                 if self.errcap > 2 {
                     let mut i = 0usize;
-                    while i < self.errcap && unsafe { *self.errbuf.add(i) } != 0 {
+                    while i < self.errcap && *self.errbuf.add(i) != 0 {
                         i += 1;
                     }
                     let pre = b" for '\0";
                     let pp = pre.as_ptr();
                     let mut j = 0usize;
-                    while unsafe { *pp.add(j) } != 0 && i + 1 < self.errcap {
-                        unsafe { *self.errbuf.add(i) = *pp.add(j) };
+                    while *pp.add(j) != 0 && i + 1 < self.errcap {
+                        *self.errbuf.add(i) = *pp.add(j);
                         i += 1;
                         j += 1;
                     }
                     j = 0;
                     while j < name_len && i + 1 < self.errcap {
-                        unsafe { *self.errbuf.add(i) = *name.add(j) };
+                        *self.errbuf.add(i) = *name.add(j);
                         i += 1;
                         j += 1;
                     }
                     if i + 1 < self.errcap {
-                        unsafe { *self.errbuf.add(i) = b'\'' };
+                        *self.errbuf.add(i) = b'\'';
                         i += 1;
                         if i + 3 < self.errcap {
-                            unsafe { *self.errbuf.add(i) = b' ' };
+                            *self.errbuf.add(i) = b' ';
                             i += 1;
-                            unsafe { *self.errbuf.add(i) = b'[' };
+                            *self.errbuf.add(i) = b'[';
                             i += 1;
                             j = 0;
-                            while unsafe { *kind.add(j) } != 0 && i + 2 < self.errcap {
-                                unsafe { *self.errbuf.add(i) = *kind.add(j) };
+                            while *kind.add(j) != 0 && i + 2 < self.errcap {
+                                *self.errbuf.add(i) = *kind.add(j);
                                 i += 1;
                                 j += 1;
                             }
-                            unsafe { *self.errbuf.add(i) = b']' };
+                            *self.errbuf.add(i) = b']';
                             i += 1;
                         }
                     }
@@ -397,9 +402,9 @@ impl Lower {
                      * message filled it — an unterminated errbuf reads
                      * past errcap in every downstream printer */
                     if i < self.errcap {
-                        unsafe { *self.errbuf.add(i) = 0 };
+                        *self.errbuf.add(i) = 0;
                     } else {
-                        unsafe { *self.errbuf.add(self.errcap - 1) = 0 };
+                        *self.errbuf.add(self.errcap - 1) = 0;
                     }
                 }
             }
@@ -410,7 +415,7 @@ impl Lower {
     /* append ` on <a>.<b>` to the current error message (diagnostics) */
     unsafe fn err_parts(&mut self, a: *const u8, alen: usize, b: *const u8, blen: usize) {
         if self.errcap > 4 {
-            unsafe {
+            
                 let mut i = 0usize;
                 while i < self.errcap && unsafe { *self.errbuf.add(i) } != 0 {
                     i += 1;
@@ -444,10 +449,12 @@ impl Lower {
                 if i < self.errcap {
                     unsafe { *self.errbuf.add(i) = 0 };
                 }
-            }
+            
         }
     }
 
+    #[allow(dead_code)]
+    #[allow(dead_code)]
     unsafe fn oom(&mut self, line: u32) {
         unsafe {
             self.err(b"arena exhausted\0".as_ptr(), line);
@@ -1183,8 +1190,8 @@ impl Lower {
             }
         }
         /* head: `write!(` (7) or `writeln!(` (9) */
-        let mut newline = false;
-        let mut hl = 7usize;
+        let mut newline: bool;
+        let mut hl: usize;
         if sl < 7 {
             return false;
         }
@@ -1620,7 +1627,7 @@ impl Lower {
                 let mut el_lens: [usize; TUP_MAXF] = [0; TUP_MAXF];
                 if nk > TUP_MAXF {
                     unsafe {
-                        self.err(b"unsupported: tuple with more than 4 elements\0".as_ptr(), unsafe { (*ty).line });
+                        self.err(b"unsupported: tuple with more than 4 elements\0".as_ptr(), (*ty).line);
                     }
                     return 0;
                 }
@@ -1637,7 +1644,7 @@ impl Lower {
                 let slot = unsafe { self.tup_add(el_bufs.as_ptr(), el_lens.as_ptr(), nk) };
                 if slot >= TUP_CAP {
                     unsafe {
-                        self.err(b"internal: too many tuple types\0".as_ptr(), unsafe { (*ty).line });
+                        self.err(b"internal: too many tuple types\0".as_ptr(), (*ty).line);
                     }
                     return 0;
                 }
@@ -1651,14 +1658,14 @@ impl Lower {
                 };
                 if tdn.is_null() {
                     unsafe {
-                        self.err(b"internal: tuple typedef name too long\0".as_ptr(), unsafe { (*ty).line });
+                        self.err(b"internal: tuple typedef name too long\0".as_ptr(), (*ty).line);
                     }
                     return 0;
                 }
                 let tdn_len = unsafe { Lower::tup_typedef_name(base, blens, nk, tdn, need) };
                 if tdn_len == 0 {
                     unsafe {
-                        self.err(b"internal: tuple typedef name too long\0".as_ptr(), unsafe { (*ty).line });
+                        self.err(b"internal: tuple typedef name too long\0".as_ptr(), (*ty).line);
                     }
                     return 0;
                 }
@@ -1724,7 +1731,7 @@ impl Lower {
                     return at;
                 }
                 unsafe {
-                    self.err(b"bad pointer type\0".as_ptr(), unsafe { (*ty).line });
+                    self.err(b"bad pointer type\0".as_ptr(), (*ty).line);
                 }
                 return 0;
             }
@@ -1848,7 +1855,7 @@ impl Lower {
                     return at;
                 }
                 unsafe {
-                    self.err(b"bad reference type\0".as_ptr(), unsafe { (*ty).line });
+                    self.err(b"bad reference type\0".as_ptr(), (*ty).line);
                 }
                 return 0;
             }
@@ -1870,7 +1877,7 @@ impl Lower {
                         let size = unsafe { *kids.add(1) };
                         at = unsafe { zput(out, cap, at, b" \0".as_ptr()) };
                         at = unsafe { zput(out, cap, at, b"[\0".as_ptr()) };
-                        at = unsafe { zput(out, cap, at, unsafe { (*size).text }) };
+                        at = unsafe { zput(out, cap, at, (*size).text) };
                         at = unsafe { zput(out, cap, at, b"]\0".as_ptr()) };
                     }
                     unsafe {
@@ -1879,7 +1886,7 @@ impl Lower {
                     return at;
                 }
                 unsafe {
-                    self.err(b"bad array type\0".as_ptr(), unsafe { (*ty).line });
+                    self.err(b"bad array type\0".as_ptr(), (*ty).line);
                 }
                 return 0;
             }
@@ -1950,7 +1957,7 @@ impl Lower {
                     let row = unsafe { self.fnps.intern(sig, sat) };
                     if row >= FNP_CAP {
                         unsafe {
-                            self.err(b"fn-pointer type table overflow\0".as_ptr(), unsafe { (*ty).line });
+                            self.err(b"fn-pointer type table overflow\0".as_ptr(), (*ty).line);
                         }
                         return 0;
                     }
@@ -1990,7 +1997,7 @@ impl Lower {
             return at;
         }
         unsafe {
-            self.err(b"bad type node\0".as_ptr(), unsafe { (*ty).line });
+            self.err(b"bad type node\0".as_ptr(), (*ty).line);
         }
         0
     }
@@ -2194,7 +2201,7 @@ impl Lower {
         let mut at = 0usize;
         if nk == 0 {
             unsafe {
-                self.err(b"empty type path\0".as_ptr(), unsafe { (*ty).line });
+                self.err(b"empty type path\0".as_ptr(), (*ty).line);
             }
             return 0;
         }
@@ -2215,7 +2222,7 @@ impl Lower {
         if unsafe { z_eq(fname, flen, b"Option\0".as_ptr()) } {
             if nk < 2 {
                 unsafe {
-                    self.err(b"bad Option type\0".as_ptr(), unsafe { (*ty).line });
+                    self.err(b"bad Option type\0".as_ptr(), (*ty).line);
                 }
                 return 0;
             }
@@ -2275,13 +2282,13 @@ impl Lower {
                 let gate = if alnum { 110 } else { 48 };
                 if n >= gate {
                     unsafe {
-                        self.err(b"unsupported: Option payload type too long\0".as_ptr(), unsafe { (*ty).line });
+                        self.err(b"unsupported: Option payload type too long\0".as_ptr(), (*ty).line);
                     }
                     return 0;
                 }
                 if unsafe { self.opt_add(inner_buf, n) } >= OPT_CAP {
                     unsafe {
-                        self.err(b"internal: too many Option payload types\0".as_ptr(), unsafe { (*ty).line });
+                        self.err(b"internal: too many Option payload types\0".as_ptr(), (*ty).line);
                     }
                     return 0;
                 }
@@ -2289,7 +2296,7 @@ impl Lower {
                 let tdn_len = unsafe { Lower::opt_typedef_name(inner_buf, n, tdn, 160) };
                 if tdn_len == 0 {
                     unsafe {
-                        self.err(b"internal: Option typedef name too long\0".as_ptr(), unsafe { (*ty).line });
+                        self.err(b"internal: Option typedef name too long\0".as_ptr(), (*ty).line);
                     }
                     return 0;
                 }
@@ -2319,7 +2326,7 @@ impl Lower {
         if unsafe { z_eq(fname, flen, b"Result\0".as_ptr()) } {
             if nk < garg + 2 {
                 unsafe {
-                    self.err(b"bad Result type\0".as_ptr(), unsafe { (*ty).line });
+                    self.err(b"bad Result type\0".as_ptr(), (*ty).line);
                 }
                 return 0;
             }
@@ -2349,7 +2356,7 @@ impl Lower {
             let row = unsafe { self.res_add(ok_v, ok_l, eb, en) };
             if row >= RES_CAP {
                 unsafe {
-                    self.err(b"internal: too many Result payload pairs\0".as_ptr(), unsafe { (*ty).line });
+                    self.err(b"internal: too many Result payload pairs\0".as_ptr(), (*ty).line);
                 }
                 return 0;
             }
@@ -2357,7 +2364,7 @@ impl Lower {
             let tdn_len = unsafe { Lower::res_typedef_name(ok_v, ok_l, eb, en, tdn, 192) };
             if tdn_len == 0 {
                 unsafe {
-                    self.err(b"internal: Result typedef name too long\0".as_ptr(), unsafe { (*ty).line });
+                    self.err(b"internal: Result typedef name too long\0".as_ptr(), (*ty).line);
                 }
                 return 0;
             }
@@ -2392,7 +2399,7 @@ impl Lower {
         }
         /* Registered transparent newtype used with its generic arg
          * (`Mut<T>`, `Mut<[Conn; N]>`) — the C type is the inner arg's. */
-        if unsafe { z_eq(unsafe { (*ty).text }, unsafe { (*ty).text_len }, b"gpath\0".as_ptr()) }
+        if unsafe { z_eq((*ty).text, (*ty).text_len, b"gpath\0".as_ptr()) }
             && nk >= 2
             && unsafe { self.nt_find(fname, flen) }
         {
@@ -2421,7 +2428,7 @@ impl Lower {
             let slot = unsafe { self.vecs.intern(inner_buf, n) };
             if slot == VEC_CAP {
                 unsafe {
-                    self.err(b"vec type table overflow\0".as_ptr(), unsafe { (*ty).line });
+                    self.err(b"vec type table overflow\0".as_ptr(), (*ty).line);
                 }
                 return 0;
             }
@@ -2429,7 +2436,7 @@ impl Lower {
             let tdn_len = unsafe { VecTab::name_for(slot, tdn, 96) };
             if tdn_len == 0 {
                 unsafe {
-                    self.err(b"internal: vec typedef name too long\0".as_ptr(), unsafe { (*ty).line });
+                    self.err(b"internal: vec typedef name too long\0".as_ptr(), (*ty).line);
                 }
                 return 0;
             }
@@ -2461,7 +2468,7 @@ impl Lower {
             let slot = unsafe { self.locks.intern(inner_buf, n) };
             if slot == LOCK_CAP {
                 unsafe {
-                    self.err(b"lock type table overflow\0".as_ptr(), unsafe { (*ty).line });
+                    self.err(b"lock type table overflow\0".as_ptr(), (*ty).line);
                 }
                 return 0;
             }
@@ -2469,7 +2476,7 @@ impl Lower {
             let tdn_len = unsafe { LockTab::name_for(slot, tdn, 96) };
             if tdn_len == 0 {
                 unsafe {
-                    self.err(b"internal: lock typedef name too long\0".as_ptr(), unsafe { (*ty).line });
+                    self.err(b"internal: lock typedef name too long\0".as_ptr(), (*ty).line);
                 }
                 return 0;
             }
@@ -2502,7 +2509,7 @@ impl Lower {
             let row = unsafe { self.btms.intern(kb, kl, vb, vl) };
             if row >= BTM_CAP {
                 unsafe {
-                    self.err(b"btree map type table overflow\0".as_ptr(), unsafe { (*ty).line });
+                    self.err(b"btree map type table overflow\0".as_ptr(), (*ty).line);
                 }
                 return 0;
             }
@@ -2510,7 +2517,7 @@ impl Lower {
             let tdn_len = unsafe { BtmTab::name_for(row, tdn, 96) };
             if tdn_len == 0 {
                 unsafe {
-                    self.err(b"internal: btree typedef name too long\0".as_ptr(), unsafe { (*ty).line });
+                    self.err(b"internal: btree typedef name too long\0".as_ptr(), (*ty).line);
                 }
                 return 0;
             }
@@ -2529,11 +2536,11 @@ impl Lower {
          * took the last generic ARG as the type (`Vec<Export>` -> `Export`),
          * a miscompile. `gpath` text marks a parsed generic list; plain
          * multi-segment paths (`core::ffi::c_void`) stay on the leaf render. */
-        if unsafe { z_eq(unsafe { (*ty).text }, unsafe { (*ty).text_len }, b"gpath\0".as_ptr()) }
+        if unsafe { z_eq((*ty).text, (*ty).text_len, b"gpath\0".as_ptr()) }
             && nk >= 2
         {
             unsafe {
-                self.err(b"unsupported: generic type outside Option/UnsafeCell\0".as_ptr(), unsafe { (*ty).line });
+                self.err(b"unsupported: generic type outside Option/UnsafeCell\0".as_ptr(), (*ty).line);
             }
             return 0;
         }
@@ -2541,7 +2548,7 @@ impl Lower {
             || unsafe { z_eq(fname, flen, b"i128\0".as_ptr()) }
         {
             unsafe {
-                self.err(b"unsupported: 128-bit integer type\0".as_ptr(), unsafe { (*ty).line });
+                self.err(b"unsupported: 128-bit integer type\0".as_ptr(), (*ty).line);
             }
             return 0;
         }
@@ -2612,7 +2619,7 @@ impl Lower {
                         let ftxt = unsafe { (*single).text };
                         let flen = unsafe { (*single).text_len };
                         if flen == 5 && !ftxt.is_null() && unsafe { z_eq(ftxt, flen, b"tuple\0".as_ptr()) } {
-                            unsafe { self.nt_add(unsafe { (*item).text }, unsafe { (*item).text_len }) };
+                            unsafe { self.nt_add((*item).text, (*item).text_len) };
                         }
                     }
                     i += 1;
@@ -2624,13 +2631,13 @@ impl Lower {
                  * alias the real struct's SymTab row — add() would zero
                  * its field table. First definition wins, same rule the
                  * emission passes enforce via tydone. */
-                if unsafe { (*self.syms).find(unsafe { (*item).text }, unsafe { (*item).text_len }) }
+                if unsafe { (*self.syms).find((*item).text, (*item).text_len) }
                     < SYM_CAP
                 {
                     i += 1;
                     continue;
                 }
-                let s = unsafe { (*self.syms).add(unsafe { (*item).text }, unsafe { (*item).text_len }) };
+                let s = unsafe { (*self.syms).add((*item).text, (*item).text_len) };
                 let mut j = 0usize;
                 while j < unsafe { (*item).n_kids } as usize {
                     let f = unsafe { *(*item).kids.add(j) };
@@ -2655,7 +2662,7 @@ impl Lower {
                  * resolve their type; variants go into the enum table so
                  * the all-zero static-initializer elision can prove which
                  * variants are zero (same numbering lower_enum assigns). */
-                let _ = unsafe { (*self.syms).add(unsafe { (*item).text }, unsafe { (*item).text_len }) };
+                let _ = unsafe { (*self.syms).add((*item).text, (*item).text_len) };
                 let ename = unsafe { (*item).text };
                 let elen = unsafe { (*item).text_len };
                 let ekids = unsafe { (*item).kids };
@@ -2813,7 +2820,7 @@ impl Lower {
                      * at the first non-digit without failing. */
                     if okv {
                         unsafe {
-                            self.consts.add(unsafe { (*item).text }, unsafe { (*item).text_len }, v);
+                            self.consts.add((*item).text, (*item).text_len, v);
                         }
                     }
                 }
@@ -3024,7 +3031,7 @@ impl Lower {
         let t = unsafe { self.traits.intern(tname, tlen) };
         if t == TRAIT_CAP {
             unsafe {
-                self.err(b"trait table overflow\0".as_ptr(), unsafe { (*item).line });
+                self.err(b"trait table overflow\0".as_ptr(), (*item).line);
             }
             return;
         }
@@ -3066,7 +3073,7 @@ impl Lower {
                 unsafe {
                     self.err(
                         b"unsupported: by-value self in trait\0".as_ptr(),
-                        unsafe { (*k).line },
+                        (*k).line,
                     );
                 }
                 return;
@@ -3101,7 +3108,7 @@ impl Lower {
             }
             at = unsafe { bput(sig, TRAIT_SIG, at, ret, retlen) };
             at = unsafe { bput(sig, TRAIT_SIG, at, b" (*\0".as_ptr(), 3) };
-            at = unsafe { bput(sig, TRAIT_SIG, at, unsafe { (*k).text }, unsafe { (*k).text_len }) };
+            at = unsafe { bput(sig, TRAIT_SIG, at, (*k).text, (*k).text_len) };
             at = unsafe { bput(sig, TRAIT_SIG, at, b")(void *_self\0".as_ptr(), 13) };
             /* params: every PARAM kid after the receiver — each after the
              * `void *_self` receiver, so EVERY one takes a leading comma */
@@ -3146,8 +3153,8 @@ impl Lower {
             let ok_add = unsafe {
                 self.traits.add_method(
                     t,
-                    unsafe { (*k).text },
-                    unsafe { (*k).text_len },
+                    (*k).text,
+                    (*k).text_len,
                     true,
                     sig,
                     at,
@@ -3155,7 +3162,7 @@ impl Lower {
             };
             if !ok_add {
                 unsafe {
-                    self.err(b"trait method table overflow\0".as_ptr(), unsafe { (*k).line });
+                    self.err(b"trait method table overflow\0".as_ptr(), (*k).line);
                 }
                 return;
             }
@@ -3223,7 +3230,7 @@ impl Lower {
                 self.ti_n += 1;
             } else {
                 unsafe {
-                    self.err(b"trait impl table overflow\0".as_ptr(), unsafe { (*item).line });
+                    self.err(b"trait impl table overflow\0".as_ptr(), (*item).line);
                 }
                 return;
             }
@@ -3263,7 +3270,7 @@ impl Lower {
             let mut at = 0usize;
             at = unsafe { bput(name_buf, 128, at, self_ty, self_ty_len) };
             at = unsafe { bput(name_buf, 128, at, b"_\0".as_ptr(), 1) };
-            at = unsafe { bput(name_buf, 128, at, unsafe { (*k).text }, unsafe { (*k).text_len }) };
+            at = unsafe { bput(name_buf, 128, at, (*k).text, (*k).text_len) };
             unsafe {
                 *name_buf.add(at) = 0;
             }
@@ -4040,7 +4047,7 @@ impl Lower {
                             if at > 0 {
                                 at = unsafe { bput(full, 128, at, b"_\0".as_ptr(), 1) };
                             }
-                            at = unsafe { bput(full, 128, at, unsafe { (*seg).text }, unsafe { (*seg).text_len }) };
+                            at = unsafe { bput(full, 128, at, (*seg).text, (*seg).text_len) };
                             ci += 1;
                         }
                         if ok_join {
@@ -4053,7 +4060,7 @@ impl Lower {
                                 let ename = self.arena_tmp();
                                 let mut eat = 0usize;
                                 eat = unsafe {
-                                    bput(ename, 96, eat, unsafe { (*(*ck2.add(0))).text }, unsafe { (*(*ck2.add(0))).text_len })
+                                    bput(ename, 96, eat, (*(*ck2.add(0))).text, (*(*ck2.add(0))).text_len)
                                 };
                                 unsafe {
                                     *ename.add(eat) = 0;
@@ -4117,9 +4124,9 @@ impl Lower {
                         let s0 = unsafe { *ck2.add(0) };
                         let s1 = unsafe { *ck2.add(1) };
                         let s2 = unsafe { *ck2.add(2) };
-                        if unsafe { z_eq(unsafe { (*s0).text }, unsafe { (*s0).text_len }, b"core\0".as_ptr()) }
-                            && unsafe { z_eq(unsafe { (*s1).text }, unsafe { (*s1).text_len }, b"slice\0".as_ptr()) }
-                            && unsafe { z_eq(unsafe { (*s2).text }, unsafe { (*s2).text_len }, b"from_raw_parts\0".as_ptr()) }
+                        if unsafe { z_eq((*s0).text, (*s0).text_len, b"core\0".as_ptr()) }
+                            && unsafe { z_eq((*s1).text, (*s1).text_len, b"slice\0".as_ptr()) }
+                            && unsafe { z_eq((*s2).text, (*s2).text_len, b"from_raw_parts\0".as_ptr()) }
                         {
                             let row = unsafe { self.arrs.intern(b"uint8_t\0".as_ptr(), 7) };
                             if row < ARR_CAP {
@@ -4136,9 +4143,9 @@ impl Lower {
                          * bytes are already UTF-8 by the callers' contract
                          * (registry buffers), so the value is the view
                          * itself; typing hands .ok() the str_ref payload. */
-                        if unsafe { z_eq(unsafe { (*s0).text }, unsafe { (*s0).text_len }, b"core\0".as_ptr()) }
-                            && unsafe { z_eq(unsafe { (*s1).text }, unsafe { (*s1).text_len }, b"str\0".as_ptr()) }
-                            && unsafe { z_eq(unsafe { (*s2).text }, unsafe { (*s2).text_len }, b"from_utf8\0".as_ptr()) }
+                        if unsafe { z_eq((*s0).text, (*s0).text_len, b"core\0".as_ptr()) }
+                            && unsafe { z_eq((*s1).text, (*s1).text_len, b"str\0".as_ptr()) }
+                            && unsafe { z_eq((*s2).text, (*s2).text_len, b"from_utf8\0".as_ptr()) }
                         {
                             let w = unsafe { zput(out, cap, 0, b"rsx_str_ref_t\0".as_ptr()) };
                             return if w >= cap { 0 } else { w };
@@ -4237,7 +4244,7 @@ impl Lower {
                             let seg_s = unsafe { *ck_s.add(0) };
                             if unsafe { (*seg_s).kind } == pm_jit_rsx_ast_kind::PATH
                                 && unsafe {
-                                    z_eq(unsafe { (*seg_s).text }, unsafe { (*seg_s).text_len }, b"Some\0".as_ptr())
+                                    z_eq((*seg_s).text, (*seg_s).text_len, b"Some\0".as_ptr())
                                 }
                                 && unsafe { (*e).n_kids } as usize >= 2
                             {
@@ -4287,13 +4294,13 @@ impl Lower {
                             let seg_s = unsafe { *ck_s.add(0) };
                             if unsafe { (*seg_s).kind } == pm_jit_rsx_ast_kind::PATH
                                 && (unsafe {
-                                    z_eq(unsafe { (*seg_s).text }, unsafe { (*seg_s).text_len }, b"Ok\0".as_ptr())
+                                    z_eq((*seg_s).text, (*seg_s).text_len, b"Ok\0".as_ptr())
                                 } || unsafe {
-                                    z_eq(unsafe { (*seg_s).text }, unsafe { (*seg_s).text_len }, b"Err\0".as_ptr())
+                                    z_eq((*seg_s).text, (*seg_s).text_len, b"Err\0".as_ptr())
                                 })
                                 && unsafe { (*e).n_kids } as usize >= 2
                             {
-                                let is_ok = unsafe { z_eq(unsafe { (*seg_s).text }, unsafe { (*seg_s).text_len }, b"Ok\0".as_ptr()) };
+                                let is_ok = unsafe { z_eq((*seg_s).text, (*seg_s).text_len, b"Ok\0".as_ptr()) };
                                 let args_s = unsafe { *kids.add(1) };
                                 let an_s = unsafe { (*args_s).n_kids } as usize;
                                 /* Err's payload may be `_` or an ident-less
@@ -4546,7 +4553,7 @@ impl Lower {
                              * view of bytes, char, another String). */
                             if cn >= 2 {
                                 let head2 = unsafe { *ck.add(cn - 2) };
-                                if unsafe { z_eq(unsafe { (*head2).text }, unsafe { (*head2).text_len }, b"String\0".as_ptr()) }
+                                if unsafe { z_eq((*head2).text, (*head2).text_len, b"String\0".as_ptr()) }
                                     && (unsafe { z_eq(name, nl, b"from\0".as_ptr()) }
                                         || unsafe { z_eq(name, nl, b"from_utf8_lossy\0".as_ptr()) })
                                 {
@@ -4744,16 +4751,16 @@ impl Lower {
                 let s = unsafe { (*self.syms).find(tb, tl) };
                 if s >= SYM_CAP {
                     unsafe {
-                        self.err(b"unsupported: field base type - ascribe it\0".as_ptr(), unsafe { (*e).line });
-                        self.err_parts(tb, tl, unsafe { (*fname).text }, unsafe { (*fname).text_len });
+                        self.err(b"unsupported: field base type - ascribe it\0".as_ptr(), (*e).line);
+                        self.err_parts(tb, tl, (*fname).text, (*fname).text_len);
                     }
                     return 0;
                 }
                 let n2 = unsafe {
                     (*self.syms).field_ctype(
                         s,
-                        unsafe { (*fname).text },
-                        unsafe { (*fname).text_len },
+                        (*fname).text,
+                        (*fname).text_len,
                         out,
                     )
                 };
@@ -4763,8 +4770,8 @@ impl Lower {
                     let sc = unsafe { (*self.syms).field_counts[s] };
                     let _ = sc;
                     unsafe {
-                        self.err(b"unsupported: unknown field of base type\0".as_ptr(), unsafe { (*e).line });
-                        self.err_parts(tb, tl, unsafe { (*fname).text }, unsafe { (*fname).text_len });
+                        self.err(b"unsupported: unknown field of base type\0".as_ptr(), (*e).line);
+                        self.err_parts(tb, tl, (*fname).text, (*fname).text_len);
                         self.err_parts(st, stl, b"(struct slot)\0".as_ptr(), 14);
                     }
                 }
@@ -4859,7 +4866,7 @@ impl Lower {
                 }
             }
             /* last '[' at or after the last non-space byte; find last '[' */
-            let mut last = bn;
+            let mut last: usize;
             let mut open: i64 = -1;
             let mut i = bn as i64 - 1;
             while i >= 0 {
@@ -5052,7 +5059,7 @@ impl Lower {
                                     if unsafe { (*pat2).kind } == pm_jit_rsx_ast_kind::PATH {
                                         let mut bnode = pat2;
                                         if unsafe { (*pat2).n_kids } as usize == 1
-                                            && unsafe { z_eq(unsafe { (*pat2).text }, unsafe { (*pat2).text_len }, b"path\0".as_ptr()) }
+                                            && unsafe { z_eq((*pat2).text, (*pat2).text_len, b"path\0".as_ptr()) }
                                         {
                                             bnode = unsafe { *(*pat2).kids.add(0) };
                                         }
@@ -5165,7 +5172,7 @@ impl Lower {
                             let pat = unsafe { *ak.add(0) };
 
                             /* arm kids: [pat, body] or [pat, guard, body] */
-                            let mut br = unsafe { *ak.add(unsafe { (*arm).n_kids } as usize - 1) };
+                            let mut br = unsafe { *ak.add((*arm).n_kids as usize - 1) };
                             let mut bk = unsafe { (*br).kind };
                             while bk == pm_jit_rsx_ast_kind::EXPR_STMT
                                 && unsafe { (*br).n_kids } >= 1
@@ -5199,15 +5206,15 @@ impl Lower {
                                     let head = unsafe { *pk.add(0) };
                                     let bind = unsafe { *pk.add(1) };
                                     if unsafe { (*head).kind } == pm_jit_rsx_ast_kind::PATH
-                                        && unsafe { z_eq(unsafe { (*head).text }, unsafe { (*head).text_len }, b"Some\0".as_ptr()) }
+                                        && unsafe { z_eq((*head).text, (*head).text_len, b"Some\0".as_ptr()) }
                                         && unsafe { (*bind).kind } == pm_jit_rsx_ast_kind::PATH
                                         && unsafe { (*bind).n_kids } >= 1
                                     {
                                         let bleaf = unsafe { *(*bind).kids.add(0) };
                                         unsafe {
                                             (*locals).add(
-                                                unsafe { (*bleaf).text },
-                                                unsafe { (*bleaf).text_len },
+                                                (*bleaf).text,
+                                                (*bleaf).text_len,
                                                 elem_buf.as_ptr(),
                                                 elem_len,
                                                 self.depth + 1,
@@ -5291,7 +5298,6 @@ impl Lower {
                 return 0;
             }
             let mut void_len = 0usize;
-            let mut charp_at = 0usize;
             let mut charp_len = 0usize;
             let mut ti = 1usize;
             while ti < nk && ti < 3 {
@@ -5308,7 +5314,6 @@ impl Lower {
                     if n == 12 && unsafe { z_eq(out, n, b"const char *\0".as_ptr()) } {
                         if charp_len == 0 {
                             charp_len = n;
-                            charp_at = ti;
                         }
                         ti += 1;
                         continue;
@@ -5417,7 +5422,7 @@ impl Lower {
                     {
                         let rname = unsafe { *(*recv).kids.add(1) };
                         if unsafe { (*rname).text_len } == 6
-                            && unsafe { z_eq(unsafe { (*rname).text }, 6, b"rsplit\0".as_ptr()) }
+                            && unsafe { z_eq((*rname).text, 6, b"rsplit\0".as_ptr()) }
                         {
                             let base = unsafe { *(*recv).kids.add(0) };
                             let sb = self.arena_tmp();
@@ -5516,7 +5521,7 @@ impl Lower {
                         let rk = unsafe { (*recv).kids };
                         let rname = unsafe { *rk.add(1) };
                         if unsafe { (*rname).text_len } == 3
-                            && unsafe { z_eq(unsafe { (*rname).text }, 3, b"map\0".as_ptr()) }
+                            && unsafe { z_eq((*rname).text, 3, b"map\0".as_ptr()) }
                         {
                             let map_recv = unsafe { *rk.add(0) };
                             let map_args = unsafe { *rk.add(2) };
@@ -5534,8 +5539,8 @@ impl Lower {
                                         let sp = unsafe { *mkp.add(mkn - 2) };
                                         if unsafe { (*sl).kind } == pm_jit_rsx_ast_kind::PATH
                                             && unsafe { (*sp).kind } == pm_jit_rsx_ast_kind::PATH
-                                            && unsafe { z_eq(unsafe { (*sl).text }, unsafe { (*sl).text_len }, b"as_str\0".as_ptr()) }
-                                            && unsafe { z_eq(unsafe { (*sp).text }, unsafe { (*sp).text_len }, b"String\0".as_ptr()) }
+                                            && unsafe { z_eq((*sl).text, (*sl).text_len, b"as_str\0".as_ptr()) }
+                                            && unsafe { z_eq((*sp).text, (*sp).text_len, b"String\0".as_ptr()) }
                                         {
                                             /* input must be Vec<String>/&[String]:
                                              * the output is Vec<&str>. */
@@ -5548,7 +5553,7 @@ impl Lower {
                                                 let mrn = unsafe { *mrk.add(1) };
                                                 let mra = unsafe { *mrk.add(2) };
                                                 if unsafe { (*mrn).text_len } == 4
-                                                    && unsafe { z_eq(unsafe { (*mrn).text }, 4, b"iter\0".as_ptr()) }
+                                                    && unsafe { z_eq((*mrn).text, 4, b"iter\0".as_ptr()) }
                                                     && (unsafe { (*mra).n_kids } as usize) == 0
                                                 {
                                                     base2 = unsafe { *mrk.add(0) };
@@ -5610,9 +5615,9 @@ impl Lower {
                                     let mra = unsafe { *mrk.add(2) };
                                     let mrn_len = unsafe { (*mrn).text_len };
                                     let is_iter = mrn_len == 4
-                                        && unsafe { z_eq(unsafe { (*mrn).text }, 4, b"iter\0".as_ptr()) };
+                                        && unsafe { z_eq((*mrn).text, 4, b"iter\0".as_ptr()) };
                                     let is_into = mrn_len == 9
-                                        && unsafe { z_eq(unsafe { (*mrn).text }, 9, b"into_iter\0".as_ptr()) };
+                                        && unsafe { z_eq((*mrn).text, 9, b"into_iter\0".as_ptr()) };
                                     if (is_iter || is_into) && (unsafe { (*mra).n_kids } as usize) == 0
                                     {
                                         base = unsafe { *mrk.add(0) };
@@ -5797,7 +5802,7 @@ impl Lower {
                         let rk = unsafe { (*recv).kids };
                         let rname = unsafe { *rk.add(1) };
                         if unsafe { (*rname).text_len } == 7
-                            && unsafe { z_eq(unsafe { (*rname).text }, 7, b"collect\0".as_ptr()) }
+                            && unsafe { z_eq((*rname).text, 7, b"collect\0".as_ptr()) }
                         {
                             let inner_recv = unsafe { *rk.add(0) };
                             /* inner_recv = split_whitespace(c) */
@@ -5808,7 +5813,7 @@ impl Lower {
                                 let iname = unsafe { *ik.add(1) };
                                 if unsafe { (*iname).text_len } == 16
                                     && unsafe {
-                                        z_eq(unsafe { (*iname).text }, 16, b"split_whitespace\0".as_ptr())
+                                        z_eq((*iname).text, 16, b"split_whitespace\0".as_ptr())
                                     }
                                 {
                                     let base = unsafe { *ik.add(0) };
@@ -6212,9 +6217,7 @@ impl Lower {
                         /* a receiver that IS a pointer to the struct-Option
                          * (the lock guard): strip the trailing ` *` — the
                          * payload spelling is the pointee's element. */
-                        let mut behind_ptr = false;
                         if sl > 2 && unsafe { *sp.add(sl - 1) } == b'*' {
-                            behind_ptr = true;
                             sl -= 1;
                             while sl > 0 && unsafe { *sp.add(sl - 1) } == b' ' {
                                 sl -= 1;
@@ -6277,8 +6280,8 @@ impl Lower {
                             let s1 = unsafe { *segs.add(1) };
                             if unsafe { (*s0).kind } == pm_jit_rsx_ast_kind::PATH
                                 && unsafe { (*s1).kind } == pm_jit_rsx_ast_kind::PATH
-                                && unsafe { z_eq(unsafe { (*s0).text }, unsafe { (*s0).text_len }, b"io\0".as_ptr()) }
-                                && unsafe { z_eq(unsafe { (*s1).text }, unsafe { (*s1).text_len }, b"stdout\0".as_ptr()) }
+                                && unsafe { z_eq((*s0).text, (*s0).text_len, b"io\0".as_ptr()) }
+                                && unsafe { z_eq((*s1).text, (*s1).text_len, b"stdout\0".as_ptr()) }
                             {
                                 /* the probe arms the includes here — the
                                  * pre-scan runs before the type-pass
@@ -6306,7 +6309,7 @@ impl Lower {
                             let segs = unsafe { (*rname).kids };
                             let s2 = unsafe { *segs.add(2) };
                             if unsafe { (*s2).kind } == pm_jit_rsx_ast_kind::PATH
-                                && unsafe { z_eq(unsafe { (*s2).text }, unsafe { (*s2).text_len }, b"var_os\0".as_ptr()) }
+                                && unsafe { z_eq((*s2).text, (*s2).text_len, b"var_os\0".as_ptr()) }
                             {
                                 self.env_used = true;
                                 let n2 = unsafe { zput(out, cap, 0, b"bool\0".as_ptr()) };
@@ -6437,7 +6440,7 @@ impl Lower {
                         let rk2 = unsafe { (*recv2).kids };
                         let rname2 = unsafe { *rk2.add(1) };
                         if unsafe { (*rname2).text_len } == 5
-                            && unsafe { z_eq(unsafe { (*rname2).text }, 5, b"entry\0".as_ptr()) }
+                            && unsafe { z_eq((*rname2).text, 5, b"entry\0".as_ptr()) }
                         {
                             return unsafe { self.expr_ctype(recv2, out, cap, locals) };
                         }
@@ -6684,7 +6687,7 @@ impl Lower {
                                 let c0n = unsafe { (*callee0).n_kids } as usize;
                                 if c0n == 3 {
                                     let r2 = unsafe { *c0k.add(2) };
-                                    if unsafe { z_eq(unsafe { (*r2).text }, unsafe { (*r2).text_len }, b"from_utf8\0".as_ptr()) } {
+                                    if unsafe { z_eq((*r2).text, (*r2).text_len, b"from_utf8\0".as_ptr()) } {
                                     self.str_ref_used = true;
                                     let slot = unsafe { self.opt_add(b"rsx_str_ref_t\0".as_ptr(), 13) };
                                     if slot < OPT_CAP {
@@ -7023,7 +7026,7 @@ impl Lower {
                         }
                         return rn;
                     }
-                    let mut w = j - 1;
+                    let mut w: usize;
                     {
                         let mut w2 = j - 1;
                         while w2 > 0 && unsafe { *rbuf.add(w2 - 1) } == b' ' {

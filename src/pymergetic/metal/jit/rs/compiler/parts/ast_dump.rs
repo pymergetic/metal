@@ -16,14 +16,14 @@ unsafe fn dump_node(
         unsafe { (*out).puts(b"  \0".as_ptr()) };
         i += 1;
     }
-    unsafe { (*out).puts(unsafe { ast_kind_name(unsafe { (*n).kind }) }) };
+    unsafe { (*out).puts(ast_kind_name((*n).kind)) };
     if unsafe { (*n).text_len } > 0 {
         unsafe { (*out).puts(b" \0".as_ptr()) };
-        unsafe { (*out).put(unsafe { (*n).text }, unsafe { (*n).text_len }) };
+        unsafe { (*out).put((*n).text, (*n).text_len) };
     }
     /* line tag on every node: refusal-to-AST correlation */
     unsafe { (*out).puts(b" @\0".as_ptr()) };
-    unsafe { (*out).put_u32(unsafe { (*n).line }) };
+    unsafe { (*out).put_u32((*n).line) };
     unsafe { (*out).putc(b'\n') };
     let kids = unsafe { (*n).kids };
     let nk = unsafe { (*n).n_kids } as usize;
@@ -53,14 +53,14 @@ unsafe fn dump_node_fixed(
         at = unsafe { bput(out, cap, at, b"  \0".as_ptr(), 2) };
         i += 1;
     }
-    at = unsafe { zput(out, cap, at, unsafe { ast_kind_name(unsafe { (*n).kind }) }) };
+    at = unsafe { zput(out, cap, at, ast_kind_name((*n).kind)) };
     if unsafe { (*n).text_len } > 0 {
         at = unsafe { bput(out, cap, at, b" \0".as_ptr(), 1) };
-        at = unsafe { bput(out, cap, at, unsafe { (*n).text }, unsafe { (*n).text_len }) };
+        at = unsafe { bput(out, cap, at, (*n).text, (*n).text_len) };
     }
     /* line tag on every node: refusal-to-AST correlation */
     at = unsafe { bput(out, cap, at, b" @\0".as_ptr(), 2) };
-    at += unsafe { zput_num(out.add(at), cap - at, unsafe { (*n).line }) };
+    at += unsafe { zput_num(out.add(at), cap - at, (*n).line) };
     at = unsafe { bput(out, cap, at, b"\n\0".as_ptr(), 1) };
     let kids = unsafe { (*n).kids };
     let nk = unsafe { (*n).n_kids } as usize;

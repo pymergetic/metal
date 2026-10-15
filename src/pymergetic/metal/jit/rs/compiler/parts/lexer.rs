@@ -165,7 +165,7 @@ impl Out {
         let mut digs = [0u8; 10];
         let mut n = v;
         let mut di = 0usize;
-        let mut j = 0usize;
+        let mut j: usize;
         while n > 0 && di < digs.len() {
             digs[di] = b'0' + (n % 10) as u8;
             n /= 10;
@@ -186,6 +186,7 @@ impl Out {
         }
     }
 
+    #[allow(dead_code)]
     unsafe fn put_i64(&mut self, v: i64) {
         if v < 0 {
             unsafe {

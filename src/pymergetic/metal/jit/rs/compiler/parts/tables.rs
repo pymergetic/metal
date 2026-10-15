@@ -121,7 +121,7 @@ impl SymTab {
     unsafe fn slot(&self, name: *const u8, len: usize) -> usize {
         let mut h: usize = 5381;
         let mut i = 0usize;
-        let mut probe = 0usize;
+        let mut probe: usize;
         while i < len && i < 64 {
             h = h.wrapping_mul(33).wrapping_add(unsafe { *name.add(i) } as usize);
             i += 1;
@@ -271,7 +271,7 @@ impl FnTab {
     unsafe fn slot(&self, name: *const u8, len: usize) -> usize {
         let mut h: usize = 5381;
         let mut i = 0usize;
-        let mut probe = 0usize;
+        let mut probe: usize;
         while i < len && i < 64 {
             h = h.wrapping_mul(33).wrapping_add(unsafe { *name.add(i) } as usize);
             i += 1;
@@ -717,7 +717,9 @@ struct TraitTab {
     m_counts: [usize; TRAIT_CAP],
 }
 
+#[allow(dead_code)]
 impl TraitTab {
+    #[allow(dead_code)]
     unsafe fn new() -> TraitTab {
         TraitTab {
             names: [[0; 64]; TRAIT_CAP],
@@ -880,7 +882,9 @@ struct FnPtrTab {
     done: [bool; FNP_CAP],
 }
 
+#[allow(dead_code)]
 impl FnPtrTab {
+    #[allow(dead_code)]
     unsafe fn new() -> FnPtrTab {
         FnPtrTab {
             sigs: [[0; FNP_SIG]; FNP_CAP],
@@ -964,7 +968,9 @@ struct VecTab {
     done: [bool; VEC_CAP],
 }
 
+#[allow(dead_code)]
 impl VecTab {
+    #[allow(dead_code)]
     unsafe fn new() -> VecTab {
         VecTab {
             elems: [[0; CT_SIG]; VEC_CAP],
@@ -1105,7 +1111,9 @@ impl VecTab {
  * match: get/insert/entry-or-insert on the exact key bytes).
  * Numbered rows mirror VecTab: rsx_map_<row>, deterministic by collection
  * order, the self-host fixed point gates that. */
+#[allow(dead_code)]
 struct MapTab {
+    #[allow(dead_code)]
     /* canonical value C-type text (the key plane is rsx_str_t only) */
     vals: [[u8; CT_SIG]; MAP_CAP],
     val_lens: [usize; MAP_CAP],
@@ -1113,6 +1121,7 @@ struct MapTab {
     done: [bool; MAP_CAP],
 }
 
+#[allow(dead_code)]
 impl MapTab {
     unsafe fn new() -> MapTab {
         MapTab {
@@ -1124,6 +1133,7 @@ impl MapTab {
     }
 
     /* typedef name: rsx_map_<row> (row < MAP_CAP, <= 2 digits). */
+    #[allow(dead_code)]
     unsafe fn name_for(row: usize, out: *mut u8, cap: usize) -> usize {
         let at = unsafe { bput(out, cap, 0, b"rsx_map_\0".as_ptr(), 8) };
         if at != 8 || cap <= 10 {
@@ -1264,6 +1274,7 @@ struct ArrTab {
     done: [bool; ARR_CAP],
 }
 
+#[allow(dead_code)]
 impl ArrTab {
     unsafe fn new() -> ArrTab {
         ArrTab {
@@ -1332,6 +1343,7 @@ impl ArrTab {
         self.n - 1
     }
 
+    #[allow(dead_code)]
     unsafe fn find(&self, elem: *const u8, elen: usize) -> usize {
         let mut s = 0usize;
         while s < self.n {
@@ -1386,7 +1398,9 @@ struct LockTab {
     done: [bool; LOCK_CAP],
 }
 
+#[allow(dead_code)]
 impl LockTab {
+    #[allow(dead_code)]
     unsafe fn new() -> LockTab {
         LockTab {
             elems: [[0; LOCK_SIG]; LOCK_CAP],
@@ -1516,7 +1530,9 @@ struct BtmTab {
     fwd_done: [bool; BTM_CAP],
 }
 
+#[allow(dead_code)]
 impl BtmTab {
+    #[allow(dead_code)]
     unsafe fn new() -> BtmTab {
         BtmTab {
             keys: [[0; BTM_SIG]; BTM_CAP],

@@ -16,25 +16,31 @@
 #![allow(clippy::missing_safety_doc)]
 #![allow(non_camel_case_types)]
 // The micro-rustc card predates edition 2024's unsafe-op-in-unsafe-fn rule:
-// its `unsafe fn` bodies carry inner `unsafe {}` blocks around every op,
-// nested inside enclosing blocks — 579 of them, all redundant now that the
-// crate root allows the ops directly. Unwrapping them would churn 579 sites
-// of a self-hosting card whose flat-TU bytes must stay byte-identical to the
-// parts (build.rs --check). The nesting is style, not safety information;
-// scoped here so the rest of the crate keeps the lint live.
-#![allow(unused_unsafe)]
+// its `unsafe fn` bodies used to carry inner `unsafe {}` wrappers around
+// every op, nested inside enclosing blocks — all redundant now that the
+// crate root allows the ops directly (metal.rs `#![allow(unsafe_op_in_unsafe_fn)]`).
+// Those redundant wrappers are unwrapped, so the raw ops sit directly in the
+// `unsafe fn` body and `unused_unsafe` is kept live to keep any new redundant
+// wrapper from creeping back in.
+#![warn(unused_unsafe)]
 // Same posture for the subset's C-idiom residue: the card is written in the
 // exact Rust subset it compiles (self-host), so it leans on C-style
 // initialize-then-fill locals, scratch bindings, and API shims for faces the
 // subset does not exercise from inside this TU (their consumers are other
-// cards / the C side, invisible to rustc's per-TU dead-code pass). Dead
-// stores, unused scratch vars, unused mut, and shim dead_code are inert to
-// the generated C and to the selfhost cycle; fixing them piecemeal churns
-// the byte-checked parts for no behavior change. Scoped to this card only —
+// cards / the C side, invisible to rustc's per-TU dead-code pass).
+// Dead stores are physically cleaned: a `let mut x: T;` whose value is
+// always overwritten before any read drops its initializer (the subset's
+// deferred-init form) and a wholly unread scratch flag drops the variable.
+// `unused_assignments` and `unused_unsafe` are kept live so no new dead
+// store or redundant wrapper creeps back in. The remaining scoped allows
+// are the true C-idiom residue — scratch bindings the subset needs to name
+// in one C scope (`unused_variables`), per-fill `mut` on deferred-init
+// locals (`unused_mut`), and cross-TU API shims (`dead_code`) — each inert
+// to the generated C and to the selfhost cycle. Scoped to this card only —
 // the rest of the crate keeps every one of these lints live.
-#![allow(dead_code)]
+#![warn(dead_code)]
 #![allow(unused_variables)]
-#![allow(unused_assignments)]
+#![warn(unused_assignments)]
 #![allow(unused_mut)]
 #![allow(unused_parens)]
 

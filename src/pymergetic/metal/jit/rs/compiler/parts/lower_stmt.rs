@@ -36,9 +36,9 @@ impl Lower {
                 self.indent();
                 self.out.puts(b"{\n\0".as_ptr());
                 self.depth += 1;
-                unsafe { (*locals).note_scope() };
+                (*locals).note_scope();
                 self.emit_match(s, locals);
-                unsafe { (*locals).drop_scope() };
+                (*locals).drop_scope();
                 self.depth -= 1;
                 self.indent();
                 self.out.puts(b"}\n\0".as_ptr());
@@ -48,31 +48,31 @@ impl Lower {
             pm_jit_rsx_ast_kind::FOR => unsafe { self.emit_for(s, locals) },
             pm_jit_rsx_ast_kind::RETURN => unsafe { self.emit_return(s, locals) },
             pm_jit_rsx_ast_kind::BREAK => unsafe {
-                let t = unsafe { (*s).text };
-                let tl = unsafe { (*s).text_len };
-                let labeled = tl > 0 && !t.is_null() && unsafe { *t == b'\'' };
+                let t = (*s).text;
+                let tl = (*s).text_len;
+                let labeled = tl > 0 && !t.is_null() && *t == b'\'';
                 self.indent();
                 if labeled {
                     /* C has no labeled break: `break 'l` is a goto to the
                      * _end label the labeled loop emits after its body. */
                     self.out.puts(b"goto \0".as_ptr());
-                    unsafe { self.put_lbl(t, tl, b"_end\0".as_ptr()) };
+                    self.put_lbl(t, tl, b"_end\0".as_ptr());
                     self.out.puts(b";\n\0".as_ptr());
                 } else {
                     self.out.puts(b"break;\n\0".as_ptr());
                 }
             },
             pm_jit_rsx_ast_kind::CONTINUE => unsafe {
-                let t = unsafe { (*s).text };
-                let tl = unsafe { (*s).text_len };
-                let labeled = tl > 0 && !t.is_null() && unsafe { *t == b'\'' };
+                let t = (*s).text;
+                let tl = (*s).text_len;
+                let labeled = tl > 0 && !t.is_null() && *t == b'\'';
                 self.indent();
                 if labeled {
                     /* `continue 'l` is a goto to the _cont label just
                      * before the loop's closing brace — the for-header
                      * increment still runs on the way out. */
                     self.out.puts(b"goto \0".as_ptr());
-                    unsafe { self.put_lbl(t, tl, b"_cont\0".as_ptr()) };
+                    self.put_lbl(t, tl, b"_cont\0".as_ptr());
                     self.out.puts(b";\n\0".as_ptr());
                 } else {
                     self.out.puts(b"continue;\n\0".as_ptr());
@@ -377,7 +377,7 @@ impl Lower {
                     unsafe {
                         self.err(
                             b"unsupported: value-position block expression\0".as_ptr(),
-                            unsafe { (*st2).line },
+                            (*st2).line,
                         );
                     }
                     unsafe { self.end_block(locals, is_unsafe_block2, saved_epoch) };
@@ -471,7 +471,7 @@ impl Lower {
             }
             return;
         }
-        let mut bleaf: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+        let mut bleaf: *const pm_jit_rsx_ast_t;
         let mut bname: *const u8 = b"_\0".as_ptr();
         let mut blen = 1usize;
         if !is_tuple_bind {
@@ -1112,11 +1112,11 @@ impl Lower {
             return false;
         }
         let leaf = unsafe { *ck.add(cn - 1) };
-        if !(unsafe { (*leaf).text_len } == 3 && unsafe { z_eq(unsafe { (*leaf).text }, 3, b"new\0".as_ptr()) }) {
+        if !(unsafe { (*leaf).text_len } == 3 && unsafe { z_eq((*leaf).text, 3, b"new\0".as_ptr()) }) {
             return false;
         }
         let head = unsafe { *ck.add(cn - 2) };
-        unsafe { z_eq(unsafe { (*head).text }, unsafe { (*head).text_len }, b"Vec\0".as_ptr()) }
+        unsafe { z_eq((*head).text, (*head).text_len, b"Vec\0".as_ptr()) }
     }
 
     /* Depth-bounded body scan for the binding's first `<name>.push(x)`:
@@ -1340,7 +1340,7 @@ impl Lower {
                                     let head2 = unsafe { *pk2.add(0) };
                                     let bind2 = unsafe { *pk2.add(1) };
                                     if unsafe { (*head2).kind } == pm_jit_rsx_ast_kind::PATH
-                                        && unsafe { z_eq(unsafe { (*head2).text }, unsafe { (*head2).text_len }, b"Some\0".as_ptr()) }
+                                        && unsafe { z_eq((*head2).text, (*head2).text_len, b"Some\0".as_ptr()) }
                                     {
                                         /* Some(bind): one PATH bind of the
                                          * payload's own type */
@@ -1350,8 +1350,8 @@ impl Lower {
                                             let bleaf2 = unsafe { *(*bind2).kids.add(0) };
                                             unsafe {
                                                 (*locals).add(
-                                                    unsafe { (*bleaf2).text },
-                                                    unsafe { (*bleaf2).text_len },
+                                                    (*bleaf2).text,
+                                                    (*bleaf2).text_len,
                                                     elem,
                                                     eln2,
                                                     0,
@@ -1417,17 +1417,17 @@ impl Lower {
                     /* unwrap a "path" wrapper on the receiver */
                     let mut bnode = recv;
                     if unsafe { (*recv).kind } == pm_jit_rsx_ast_kind::PATH
-                        && unsafe { z_eq(unsafe { (*recv).text }, unsafe { (*recv).text_len }, b"path\0".as_ptr()) }
+                        && unsafe { z_eq((*recv).text, (*recv).text_len, b"path\0".as_ptr()) }
                         && unsafe { (*recv).n_kids } as usize == 1
                     {
                         bnode = unsafe { *(*recv).kids.add(0) };
                     }
-                    let is_push = unsafe { z_eq(unsafe { (*mname).text }, unsafe { (*mname).text_len }, b"push\0".as_ptr()) }
+                    let is_push = unsafe { z_eq((*mname).text, (*mname).text_len, b"push\0".as_ptr()) }
                         && (unsafe { (*margs).n_kids } as usize) == 1;
                     /* extend(vec) — the element comes from the arg's own
                      * Vec row: `opaques.extend(ops)` with ops: Vec<String>
                      * gives String. */
-                    let is_extend = unsafe { z_eq(unsafe { (*mname).text }, unsafe { (*mname).text_len }, b"extend\0".as_ptr()) }
+                    let is_extend = unsafe { z_eq((*mname).text, (*mname).text_len, b"extend\0".as_ptr()) }
                         && (unsafe { (*margs).n_kids } as usize) == 1;
                     let same = unsafe { (*bnode).kind } == pm_jit_rsx_ast_kind::PATH
                         && unsafe { (*bnode).text_len } == nlen;
@@ -1563,7 +1563,7 @@ impl Lower {
             return;
         }
         let ct = self.arena_tmp();
-        let mut ct_len = 0usize;
+        let mut ct_len: usize;
         if !ty.is_null() {
             ct_len = unsafe { self.ctype(ty, ct, 128) };
             if ct_len == 0 {
@@ -1605,7 +1605,7 @@ impl Lower {
                     }
                 }
                 if ct_len == 0 {
-                    let mut kn = unsafe { ast_kind_name(unsafe { (*init).kind }) };
+                    let mut kn = unsafe { ast_kind_name((*init).kind) };
                     let mut init2 = init;
                     /* unwrap BLOCK/unsafe wrappers so the failing inner form shows */
                     let mut hops = 0;
@@ -1616,7 +1616,7 @@ impl Lower {
                             break;
                         }
                         init2 = unsafe { *ikids.add(ink - 1) };
-                        kn = unsafe { ast_kind_name(unsafe { (*init2).kind }) };
+                        kn = unsafe { ast_kind_name((*init2).kind) };
                         hops += 1;
                     }
                     unsafe {
@@ -1731,7 +1731,7 @@ impl Lower {
                 if inkn >= 2 {
                     let mn = unsafe { *ikids.add(1) };
                     if unsafe { (*mn).text_len } == 4
-                        && unsafe { z_eq(unsafe { (*mn).text }, 4, b"lock\0".as_ptr()) }
+                        && unsafe { z_eq((*mn).text, 4, b"lock\0".as_ptr()) }
                     {
                         unsafe {
                             self.err(
@@ -2028,7 +2028,7 @@ impl Lower {
         let nk = unsafe { (*s).n_kids } as usize;
         if nk < 2 {
             unsafe {
-                self.err(b"bad if statement\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"bad if statement\0".as_ptr(), (*s).line);
             }
             return;
         }
@@ -2092,7 +2092,7 @@ impl Lower {
                 return;
             }
             unsafe {
-                self.err(b"unsupported: else arm\0".as_ptr(), unsafe { (*els).line });
+                self.err(b"unsupported: else arm\0".as_ptr(), (*els).line);
             }
             return;
         }
@@ -2106,7 +2106,7 @@ impl Lower {
         let nk = unsafe { (*s).n_kids } as usize;
         if nk < 2 {
             unsafe {
-                self.err(b"bad if statement\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"bad if statement\0".as_ptr(), (*s).line);
             }
             return;
         }
@@ -2276,7 +2276,7 @@ impl Lower {
             }
             if ct_len == 0 {
                 ct_len = unsafe {
-                    self.expr_ctype(unsafe { *(*st).kids.add(0) }, ct, 128, locals)
+                    self.expr_ctype(*(*st).kids.add(0), ct, 128, locals)
                 };
             }
             if ct_len > 0 {
@@ -2351,7 +2351,7 @@ impl Lower {
         unsafe {
             self.err(
                 b"value-position if needs an else for every branch\0".as_ptr(),
-                unsafe { (*s).line },
+                (*s).line,
             );
         }
     }
@@ -2375,7 +2375,7 @@ impl Lower {
         let mut chain_guard: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
         if unsafe { (*scrut).kind } == pm_jit_rsx_ast_kind::BINARY
             && (unsafe { (*scrut).n_kids } as usize) >= 2
-            && unsafe { z_eq(unsafe { (*scrut).text }, unsafe { (*scrut).text_len }, b"&&\0".as_ptr()) }
+            && unsafe { z_eq((*scrut).text, (*scrut).text_len, b"&&\0".as_ptr()) }
         {
             let sk = unsafe { (*scrut).kids };
             let lhs = unsafe { *sk.add(0) };
@@ -2392,7 +2392,7 @@ impl Lower {
         let ct_len = unsafe { self.expr_ctype(scrut, ct, 128, locals) };
         if ct_len == 0 {
             unsafe {
-                self.err(b"cannot infer match scrutinee type\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"cannot infer match scrutinee type\0".as_ptr(), (*s).line);
             }
             return;
         }
@@ -2419,7 +2419,7 @@ impl Lower {
             }
             if eln > 96 {
                 unsafe {
-                    self.err(b"internal: option payload type too long\0".as_ptr(), unsafe { (*s).line });
+                    self.err(b"internal: option payload type too long\0".as_ptr(), (*s).line);
                 }
                 return;
             }
@@ -2488,7 +2488,7 @@ impl Lower {
                             let phead = unsafe { *ppk.add(0) };
                             let pbind = unsafe { *ppk.add(1) };
                             if unsafe { (*phead).kind } == pm_jit_rsx_ast_kind::PATH
-                                && unsafe { z_eq(unsafe { (*phead).text }, unsafe { (*phead).text_len }, b"Some\0".as_ptr()) }
+                                && unsafe { z_eq((*phead).text, (*phead).text_len, b"Some\0".as_ptr()) }
                                 && (unsafe { (*pbind).kind } == pm_jit_rsx_ast_kind::PATH
                                     || unsafe { (*pbind).kind } == pm_jit_rsx_ast_kind::TUPLE)
                             {
@@ -2500,7 +2500,7 @@ impl Lower {
                                     let bleaf = unsafe { *(*pbind).kids.add(0) };
                                     let ob = self.arena_tmp();
                                     already = unsafe {
-                                        (*locals).lookup(unsafe { (*bleaf).text }, unsafe { (*bleaf).text_len }, ob) > 0
+                                        (*locals).lookup((*bleaf).text, (*bleaf).text_len, ob) > 0
                                     };
                                 }
                                 if !already {
@@ -2520,7 +2520,7 @@ impl Lower {
                         {
                             let mut pbind2 = ppat;
                             if ppnk == 1
-                                && unsafe { z_eq(unsafe { (*ppat).text }, unsafe { (*ppat).text_len }, b"path\0".as_ptr()) }
+                                && unsafe { z_eq((*ppat).text, (*ppat).text_len, b"path\0".as_ptr()) }
                             {
                                 pbind2 = unsafe { *(*ppat).kids.add(0) };
                             }
@@ -2596,7 +2596,7 @@ impl Lower {
             first = false;
             /* wildcard arm: unconditional else (unless a guard narrows it) */
             let is_wc = unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH
-                && unsafe { z_eq(unsafe { (*pat).text }, unsafe { (*pat).text_len }, b"_\0".as_ptr()) };
+                && unsafe { z_eq((*pat).text, (*pat).text_len, b"_\0".as_ptr()) };
             /* Some(bind) with a guarded arm (explicit guard or a let-chain
              * tail): the guard types against the bind, so the bind decl
              * must precede the `if` test. Emitting it in the enclosing
@@ -2665,7 +2665,7 @@ impl Lower {
                         if jat > 0 {
                             jat = unsafe { bput(joined, 128, jat, b"_\0".as_ptr(), 1) };
                         }
-                        jat = unsafe { bput(joined, 128, jat, unsafe { (*seg).text }, unsafe { (*seg).text_len }) };
+                        jat = unsafe { bput(joined, 128, jat, (*seg).text, (*seg).text_len) };
                         ji += 1;
                     }
                     if ok_join && jat > 0 {
@@ -2808,7 +2808,7 @@ impl Lower {
                 /* unwrap the parser's "path" wrapper when present */
                 let mut bnode = pat;
                 if unsafe { (*pat).n_kids } as usize == 1
-                    && unsafe { z_eq(unsafe { (*pat).text }, unsafe { (*pat).text_len }, b"path\0".as_ptr()) }
+                    && unsafe { z_eq((*pat).text, (*pat).text_len, b"path\0".as_ptr()) }
                 {
                     bnode = unsafe { *(*pat).kids.add(0) };
                 }
@@ -2990,7 +2990,7 @@ impl Lower {
             let bleaf = unsafe { *(*bind).kids.add(0) };
             /* `_` bind: no declaration (a C ident named _ is not valid) */
             if unsafe { (*bleaf).text_len == 1 }
-                && unsafe { z_eq(unsafe { (*bleaf).text }, 1, b"_\0".as_ptr()) }
+                && unsafe { z_eq((*bleaf).text, 1, b"_\0".as_ptr()) }
             {
                 return;
             }
@@ -3017,8 +3017,8 @@ impl Lower {
             }
             unsafe {
                 (*locals).add(
-                    unsafe { (*bleaf).text },
-                    unsafe { (*bleaf).text_len },
+                    (*bleaf).text,
+                    (*bleaf).text_len,
                     bct,
                     bct_len,
                     1,
@@ -3034,7 +3034,7 @@ impl Lower {
              * sound one). */
             if self.cur_opt_elem_len == 0 {
                 unsafe {
-                    self.err(b"unsupported: Some((..)) on a pointer-Option\0".as_ptr(), unsafe { (*bind).line });
+                    self.err(b"unsupported: Some((..)) on a pointer-Option\0".as_ptr(), (*bind).line);
                 }
                 return;
             }
@@ -3042,7 +3042,7 @@ impl Lower {
             let pn = unsafe { (*bind).n_kids } as usize;
             if pn == 0 || pn > TUP_MAXF {
                 unsafe {
-                    self.err(b"unsupported: tuple pattern with more than 4 binds\0".as_ptr(), unsafe { (*bind).line });
+                    self.err(b"unsupported: tuple pattern with more than 4 binds\0".as_ptr(), (*bind).line);
                 }
                 return;
             }
@@ -3054,7 +3054,7 @@ impl Lower {
             if pl == 13 && unsafe { z_eq(pc, 13, b"rsx_strpair_t\0".as_ptr()) } {
                 if pn != 2 {
                     unsafe {
-                        self.err(b"Some-tuple pattern arity mismatch\0".as_ptr(), unsafe { (*bind).line });
+                        self.err(b"Some-tuple pattern arity mismatch\0".as_ptr(), (*bind).line);
                     }
                     return;
                 }
@@ -3093,13 +3093,13 @@ impl Lower {
             let slot = unsafe { self.tup_find(pc, pl) };
             if slot >= TUP_CAP {
                 unsafe {
-                    self.err(b"internal: Some-tuple payload not registered\0".as_ptr(), unsafe { (*bind).line });
+                    self.err(b"internal: Some-tuple payload not registered\0".as_ptr(), (*bind).line);
                 }
                 return;
             }
             if self.tup_counts[slot] != pn {
                 unsafe {
-                    self.err(b"Some-tuple pattern arity mismatch\0".as_ptr(), unsafe { (*bind).line });
+                    self.err(b"Some-tuple pattern arity mismatch\0".as_ptr(), (*bind).line);
                 }
                 return;
             }
@@ -3115,7 +3115,7 @@ impl Lower {
                 }
                 if unsafe { (*bnode).kind } != pm_jit_rsx_ast_kind::PATH {
                     unsafe {
-                        self.err(b"unsupported: tuple pattern element (expect binds)\0".as_ptr(), unsafe { (*bind).line });
+                        self.err(b"unsupported: tuple pattern element (expect binds)\0".as_ptr(), (*bind).line);
                     }
                     return;
                 }
@@ -3162,7 +3162,7 @@ impl Lower {
         let mut chain_guard: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
         if unsafe { (*scrut).kind } == pm_jit_rsx_ast_kind::BINARY
             && (unsafe { (*scrut).n_kids } as usize) >= 2
-            && unsafe { z_eq(unsafe { (*scrut).text }, unsafe { (*scrut).text_len }, b"&&\0".as_ptr()) }
+            && unsafe { z_eq((*scrut).text, (*scrut).text_len, b"&&\0".as_ptr()) }
         {
             let sk = unsafe { (*scrut).kids };
             let lhs = unsafe { *sk.add(0) };
@@ -3179,7 +3179,7 @@ impl Lower {
         let ct_len = unsafe { self.expr_ctype(scrut, ct, 128, locals) };
         if ct_len == 0 {
             unsafe {
-                self.err(b"cannot infer match scrutinee type\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"cannot infer match scrutinee type\0".as_ptr(), (*s).line);
             }
             return;
         }
@@ -3205,7 +3205,7 @@ impl Lower {
             }
             if eln > 96 {
                 unsafe {
-                    self.err(b"internal: option payload type too long\0".as_ptr(), unsafe { (*s).line });
+                    self.err(b"internal: option payload type too long\0".as_ptr(), (*s).line);
                 }
                 return;
             }
@@ -3267,7 +3267,7 @@ impl Lower {
                             let phead = unsafe { *ppk.add(0) };
                             let pbind = unsafe { *ppk.add(1) };
                             if unsafe { (*phead).kind } == pm_jit_rsx_ast_kind::PATH
-                                && unsafe { z_eq(unsafe { (*phead).text }, unsafe { (*phead).text_len }, b"Some\0".as_ptr()) }
+                                && unsafe { z_eq((*phead).text, (*phead).text_len, b"Some\0".as_ptr()) }
                                 && (unsafe { (*pbind).kind } == pm_jit_rsx_ast_kind::PATH
                                     || unsafe { (*pbind).kind } == pm_jit_rsx_ast_kind::TUPLE)
                             {
@@ -3279,7 +3279,7 @@ impl Lower {
                                     let bleaf = unsafe { *(*pbind).kids.add(0) };
                                     let ob = self.arena_tmp();
                                     already = unsafe {
-                                        (*locals).lookup(unsafe { (*bleaf).text }, unsafe { (*bleaf).text_len }, ob) > 0
+                                        (*locals).lookup((*bleaf).text, (*bleaf).text_len, ob) > 0
                                     };
                                 }
                                 if !already {
@@ -3297,7 +3297,7 @@ impl Lower {
                         {
                             let mut pbind2 = ppat;
                             if ppnk == 1
-                                && unsafe { z_eq(unsafe { (*ppat).text }, unsafe { (*ppat).text_len }, b"path\0".as_ptr()) }
+                                && unsafe { z_eq((*ppat).text, (*ppat).text_len, b"path\0".as_ptr()) }
                             {
                                 pbind2 = unsafe { *(*ppat).kids.add(0) };
                             }
@@ -3376,7 +3376,7 @@ impl Lower {
             }
             first = false;
             let is_wc = unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH
-                && unsafe { z_eq(unsafe { (*pat).text }, unsafe { (*pat).text_len }, b"_\0".as_ptr()) };
+                && unsafe { z_eq((*pat).text, (*pat).text_len, b"_\0".as_ptr()) };
             /* Some(bind) with a guard: scoped arm (see emit_match) —
              * binds + if + body in one brace scope so source shadowing
              * stays legal. */
@@ -3438,7 +3438,7 @@ impl Lower {
                         if jat > 0 {
                             jat = unsafe { bput(joined, 128, jat, b"_\0".as_ptr(), 1) };
                         }
-                        jat = unsafe { bput(joined, 128, jat, unsafe { (*seg).text }, unsafe { (*seg).text_len }) };
+                        jat = unsafe { bput(joined, 128, jat, (*seg).text, (*seg).text_len) };
                         ji += 1;
                     }
                     if ok_join && jat > 0 {
@@ -3574,7 +3574,7 @@ impl Lower {
                     let mut bnode = sub;
                     if unsafe { (*sub).kind } == pm_jit_rsx_ast_kind::PATH
                         && unsafe { (*sub).n_kids } as usize == 1
-                        && unsafe { z_eq(unsafe { (*sub).text }, unsafe { (*sub).text_len }, b"path\0".as_ptr()) }
+                        && unsafe { z_eq((*sub).text, (*sub).text_len, b"path\0".as_ptr()) }
                     {
                         bnode = unsafe { *(*sub).kids.add(0) };
                     }
@@ -3618,7 +3618,7 @@ impl Lower {
                     };
                     if el == 0 {
                         unsafe {
-                            self.err(b"cannot type tuple pattern binding\0".as_ptr(), unsafe { (*s).line });
+                            self.err(b"cannot type tuple pattern binding\0".as_ptr(), (*s).line);
                         }
                         return;
                     }
@@ -3642,7 +3642,7 @@ impl Lower {
             if unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH {
                 let mut bnode = pat;
                 if unsafe { (*pat).n_kids } as usize == 1
-                    && unsafe { z_eq(unsafe { (*pat).text }, unsafe { (*pat).text_len }, b"path\0".as_ptr()) }
+                    && unsafe { z_eq((*pat).text, (*pat).text_len, b"path\0".as_ptr()) }
                 {
                     bnode = unsafe { *(*pat).kids.add(0) };
                 }
@@ -3789,7 +3789,7 @@ impl Lower {
                  * the .n and the .p reads — balance holds for a bare ident
                  * AND for a pre-parenthesized field spelling. */
                 let wb = self.arena_tmp();
-                let mut wat = 0usize;
+                let mut wat: usize;
                 wat = unsafe { bput(wb, 72, 0, b"(\0".as_ptr(), 1) };
                 wat = unsafe { bput(wb, 72, wat, sv, sv_len) };
                 wat = unsafe { bput(wb, 72, wat, b")\0".as_ptr(), 1) };
@@ -3808,7 +3808,7 @@ impl Lower {
             }
             self.out.put(sv, sv_len);
             self.out.puts(b" == \0".as_ptr());
-            unsafe { self.emit_literal(unsafe { (*pat).text }, unsafe { (*pat).text_len }) };
+            unsafe { self.emit_literal((*pat).text, (*pat).text_len) };
             return;
         }
         if kind == pm_jit_rsx_ast_kind::UNARY {
@@ -3817,13 +3817,13 @@ impl Lower {
             if unsafe { (*pat).n_kids } >= 1 {
                 let inner = unsafe { *kids.add(0) };
                 let t = unsafe { (*pat).text };
-                if unsafe { z_eq(t, unsafe { (*pat).text_len }, b"-\0".as_ptr()) } {
+                if unsafe { z_eq(t, (*pat).text_len, b"-\0".as_ptr()) } {
                     self.out.put(sv, sv_len);
                     self.out.puts(b" == -\0".as_ptr());
-                    unsafe { self.emit_literal(unsafe { (*inner).text }, unsafe { (*inner).text_len }) };
+                    unsafe { self.emit_literal((*inner).text, (*inner).text_len) };
                     return;
                 }
-                if unsafe { z_eq(t, unsafe { (*pat).text_len }, b"&\0".as_ptr()) } {
+                if unsafe { z_eq(t, (*pat).text_len, b"&\0".as_ptr()) } {
                     /* &bind matches any pointer — compare address */
                     self.out.put(sv, sv_len);
                     self.out.puts(b" != 0\0".as_ptr());
@@ -3831,7 +3831,7 @@ impl Lower {
                 }
             }
             unsafe {
-                self.err(b"unsupported: pattern form\0".as_ptr(), unsafe { (*pat).line });
+                self.err(b"unsupported: pattern form\0".as_ptr(), (*pat).line);
             }
             return;
         }
@@ -3863,18 +3863,18 @@ impl Lower {
                     || unsafe { (*hi).kind } != pm_jit_rsx_ast_kind::LITERAL
                 {
                     unsafe {
-                        self.err(b"unsupported: range pattern atom\0".as_ptr(), unsafe { (*pat).line });
+                        self.err(b"unsupported: range pattern atom\0".as_ptr(), (*pat).line);
                     }
                     return;
                 }
                 self.out.putc(b'(');
                 self.out.put(sv, sv_len);
                 self.out.puts(b" >= \0".as_ptr());
-                unsafe { self.emit_literal(unsafe { (*lo).text }, unsafe { (*lo).text_len }) };
+                unsafe { self.emit_literal((*lo).text, (*lo).text_len) };
                 self.out.puts(b" && \0".as_ptr());
                 self.out.put(sv, sv_len);
                 self.out.puts(b" <= \0".as_ptr());
-                unsafe { self.emit_literal(unsafe { (*hi).text }, unsafe { (*hi).text_len }) };
+                unsafe { self.emit_literal((*hi).text, (*hi).text_len) };
                 self.out.putc(b')');
                 return;
             }
@@ -3924,10 +3924,10 @@ impl Lower {
              * some_bind path) copies `._v` (Ok) or `._e` (Err). */
             if nk >= 1
                 && unsafe { (**kids.add(0)).kind } == pm_jit_rsx_ast_kind::PATH
-                && (unsafe { z_eq(unsafe { (**kids.add(0)).text }, unsafe { (**kids.add(0)).text_len }, b"Ok\0".as_ptr()) }
-                    || unsafe { z_eq(unsafe { (**kids.add(0)).text }, unsafe { (**kids.add(0)).text_len }, b"Err\0".as_ptr()) })
+                && (unsafe { z_eq((**kids.add(0)).text, (**kids.add(0)).text_len, b"Ok\0".as_ptr()) }
+                    || unsafe { z_eq((**kids.add(0)).text, (**kids.add(0)).text_len, b"Err\0".as_ptr()) })
             {
-                let is_ok = unsafe { z_eq(unsafe { (**kids.add(0)).text }, unsafe { (**kids.add(0)).text_len }, b"Ok\0".as_ptr()) };
+                let is_ok = unsafe { z_eq((**kids.add(0)).text, (**kids.add(0)).text_len, b"Ok\0".as_ptr()) };
                 if is_ok {
                     self.out.put(sv, sv_len);
                     self.out.puts(b"._ok\0".as_ptr());
@@ -4013,7 +4013,7 @@ impl Lower {
                 let bind_is_last = unsafe { (*leaf).kind } == pm_jit_rsx_ast_kind::PATH
                     && unsafe { (*leaf).text_len } == 4
                     && !unsafe { (*leaf).text }.is_null()
-                    && unsafe { z_eq(unsafe { (*leaf).text }, 4, b"path\0".as_ptr()) };
+                    && unsafe { z_eq((*leaf).text, 4, b"path\0".as_ptr()) };
                 let mut full = self.arena_tmp();
                 let mut at = 0usize;
                 let mut i = 0usize;
@@ -4078,7 +4078,7 @@ impl Lower {
             }
             if nk == 1 && unsafe { (**kids.add(0)).kind } == pm_jit_rsx_ast_kind::STRUCT_LIT {
                 unsafe {
-                    self.err(b"unsupported: struct pattern\0".as_ptr(), unsafe { (*pat).line });
+                    self.err(b"unsupported: struct pattern\0".as_ptr(), (*pat).line);
                 }
                 return;
             }
@@ -4212,7 +4212,7 @@ impl Lower {
             let kids = unsafe { (*pat).kids };
             let nk = unsafe { (*pat).n_kids } as usize;
             let wb = self.arena_tmp();
-            let mut wat = 0usize;
+            let mut wat: usize;
             wat = unsafe { bput(wb, 72, 0, b"(\0".as_ptr(), 1) };
             wat = unsafe { bput(wb, 72, wat, sv, sv_len) };
             wat = unsafe { bput(wb, 72, wat, b")\0".as_ptr(), 1) };
@@ -4262,7 +4262,7 @@ impl Lower {
                     self.out.putc(b'1');
                 } else {
                     unsafe {
-                        self.err(b"unsupported: slice pattern element\0".as_ptr(), unsafe { (*sub).line });
+                        self.err(b"unsupported: slice pattern element\0".as_ptr(), (*sub).line);
                     }
                     return;
                 }
@@ -4272,7 +4272,7 @@ impl Lower {
             return;
         }
         unsafe {
-            self.err(b"unsupported: pattern form\0".as_ptr(), unsafe { (*pat).line });
+            self.err(b"unsupported: pattern form\0".as_ptr(), (*pat).line);
         }
     }
 
@@ -4417,7 +4417,7 @@ impl Lower {
         /* bind: PATH (unwrap the "path" wrapper) */
         let mut bind = pat;
         if unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH
-            && unsafe { z_eq(unsafe { (*pat).text }, unsafe { (*pat).text_len }, b"path\0".as_ptr()) }
+            && unsafe { z_eq((*pat).text, (*pat).text_len, b"path\0".as_ptr()) }
             && unsafe { (*pat).n_kids } as usize == 1
         {
             let seg = unsafe { *(*pat).kids.add(0) };
@@ -4434,7 +4434,7 @@ impl Lower {
         let row_slot = unsafe { self.arrs.intern(b"rsx_str_ref_t\0".as_ptr(), 13) };
         if row_slot >= ARR_CAP {
             unsafe {
-                self.err(b"internal: arr row overflow\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"internal: arr row overflow\0".as_ptr(), (*s).line);
             }
             return 1;
         }
@@ -4442,7 +4442,7 @@ impl Lower {
         let row_len = unsafe { ArrTab::name_for(row_slot, row, 96) };
         if row_len == 0 {
             unsafe {
-                self.err(b"internal: arr row name\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"internal: arr row name\0".as_ptr(), (*s).line);
             }
             return 1;
         }
@@ -4481,8 +4481,8 @@ impl Lower {
             /* byte length: the quote-stripped, escape-folded span */
             let bl = unsafe {
                 Lower::c_str_len(
-                    unsafe { (*e).text.add(1) },
-                    unsafe { (*e).text_len.saturating_sub(2) },
+                    (*e).text.add(1),
+                    (*e).text_len.saturating_sub(2),
                 )
             };
             {
@@ -4557,7 +4557,7 @@ impl Lower {
                 let nm = unsafe { *ik.add(1) };
                 let argsn = unsafe { *ik.add(2) };
                 if unsafe { (*nm).text_len } == 4
-                    && unsafe { z_eq(unsafe { (*nm).text }, 4, b"skip\0".as_ptr()) }
+                    && unsafe { z_eq((*nm).text, 4, b"skip\0".as_ptr()) }
                     && (unsafe { (*argsn).n_kids } as usize) == 1
                 {
                     let a0 = unsafe { *(*argsn).kids.add(0) };
@@ -4609,9 +4609,9 @@ impl Lower {
             let last = unsafe { *segs.add(nseg - 1) };
             let prev = unsafe { *segs.add(nseg - 2) };
             if !(unsafe { (*last).kind } == pm_jit_rsx_ast_kind::PATH
-                && unsafe { z_eq(unsafe { (*last).text }, unsafe { (*last).text_len }, b"args\0".as_ptr()) }
+                && unsafe { z_eq((*last).text, (*last).text_len, b"args\0".as_ptr()) }
                 && unsafe { (*prev).kind } == pm_jit_rsx_ast_kind::PATH
-                && unsafe { z_eq(unsafe { (*prev).text }, unsafe { (*prev).text_len }, b"env\0".as_ptr()) })
+                && unsafe { z_eq((*prev).text, (*prev).text_len, b"env\0".as_ptr()) })
             {
                 return 0;
             }
@@ -4619,7 +4619,7 @@ impl Lower {
         /* bind: PATH (unwrap the "path" wrapper) */
         let mut bind = pat;
         if unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH
-            && unsafe { z_eq(unsafe { (*pat).text }, unsafe { (*pat).text_len }, b"path\0".as_ptr()) }
+            && unsafe { z_eq((*pat).text, (*pat).text_len, b"path\0".as_ptr()) }
             && unsafe { (*pat).n_kids } as usize == 1
         {
             let seg = unsafe { *(*pat).kids.add(0) };
@@ -4756,7 +4756,7 @@ impl Lower {
                     || unsafe { z_eq(rct, 8, b"rsx_vec_\0".as_ptr()) })
             {
                 unsafe {
-                    self.err(b"internal: unknown container row\0".as_ptr(), unsafe { (*s).line });
+                    self.err(b"internal: unknown container row\0".as_ptr(), (*s).line);
                 }
                 return 1;
             }
@@ -4772,7 +4772,7 @@ impl Lower {
         }
         if tuple_pat.is_null() && unsafe { (*pat).kind } != pm_jit_rsx_ast_kind::PATH {
             unsafe {
-                self.err(b"unsupported: for-iter pattern\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"unsupported: for-iter pattern\0".as_ptr(), (*s).line);
             }
             return 1;
         }
@@ -4782,7 +4782,7 @@ impl Lower {
         if !tuple_pat.is_null() {
             if !(el >= 10 && unsafe { z_eq(eb, 10, b"rsx_tuple_\0".as_ptr()) }) {
                 unsafe {
-                    self.err(b"unsupported: for-iter tuple pattern on a non-tuple element\0".as_ptr(), unsafe { (*s).line });
+                    self.err(b"unsupported: for-iter tuple pattern on a non-tuple element\0".as_ptr(), (*s).line);
                 }
                 return 1;
             }
@@ -4794,7 +4794,7 @@ impl Lower {
                 || self.tup_counts[tup_slot] != tup_n
             {
                 unsafe {
-                    self.err(b"unsupported: for-iter tuple pattern arity\0".as_ptr(), unsafe { (*s).line });
+                    self.err(b"unsupported: for-iter tuple pattern arity\0".as_ptr(), (*s).line);
                 }
                 return 1;
             }
@@ -4803,7 +4803,7 @@ impl Lower {
         let mut vname: *const u8 = b"\0".as_ptr();
         let mut vlen = 0usize;
         if tuple_pat.is_null() {
-            if unsafe { z_eq(unsafe { (*pat).text }, unsafe { (*pat).text_len }, b"path\0".as_ptr()) }
+            if unsafe { z_eq((*pat).text, (*pat).text_len, b"path\0".as_ptr()) }
                 && unsafe { (*pat).n_kids } == 1
             {
                 let pk = unsafe { (*pat).kids };
@@ -4869,7 +4869,7 @@ impl Lower {
                     }
                 } else {
                     unsafe {
-                        self.err(b"unsupported: for-iter tuple pattern element\0".as_ptr(), unsafe { (*s).line });
+                        self.err(b"unsupported: for-iter tuple pattern element\0".as_ptr(), (*s).line);
                     }
                     return 1;
                 }
@@ -4931,7 +4931,7 @@ impl Lower {
         let rct_len = unsafe { self.expr_ctype(recv, rct, 128, locals) };
         if rct_len == 0 {
             unsafe {
-                self.err(b"cannot infer iter receiver type\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"cannot infer iter receiver type\0".as_ptr(), (*s).line);
             }
             return 1;
         }
@@ -4952,7 +4952,7 @@ impl Lower {
         if i >= rct_len {
             /* not an array — a slice/pointer: no length, refuse */
             unsafe {
-                self.err(b"unsupported: iter over non-array (slice has no length)\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"unsupported: iter over non-array (slice has no length)\0".as_ptr(), (*s).line);
             }
             return 1;
         }
@@ -4962,19 +4962,19 @@ impl Lower {
         }
         if j >= rct_len {
             unsafe {
-                self.err(b"internal: array ctype has no ']'\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"internal: array ctype has no ']'\0".as_ptr(), (*s).line);
             }
             return 1;
         }
         /* pat: a PATH bind — unwrap the "path" wrapper like the range case */
         if unsafe { (*pat).kind } != pm_jit_rsx_ast_kind::PATH {
             unsafe {
-                self.err(b"unsupported: for-iter pattern\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"unsupported: for-iter pattern\0".as_ptr(), (*s).line);
             }
             return 1;
         }
         let mut bind = pat;
-        if unsafe { z_eq(unsafe { (*pat).text }, unsafe { (*pat).text_len }, b"path\0".as_ptr()) }
+        if unsafe { z_eq((*pat).text, (*pat).text_len, b"path\0".as_ptr()) }
             && unsafe { (*pat).n_kids } == 1
         {
             let pk = unsafe { (*pat).kids };
@@ -5060,7 +5060,7 @@ impl Lower {
             || unsafe { (*pat).n_kids } as usize != 2
         {
             unsafe {
-                self.err(b"unsupported: enumerate pattern (expect (i, x) or (i, &x))\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"unsupported: enumerate pattern (expect (i, x) or (i, &x))\0".as_ptr(), (*s).line);
             }
             return 1;
         }
@@ -5076,7 +5076,7 @@ impl Lower {
         }
         if unsafe { (*idx_name).kind } != pm_jit_rsx_ast_kind::PATH {
             unsafe {
-                self.err(b"unsupported: enumerate index pattern\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"unsupported: enumerate index pattern\0".as_ptr(), (*s).line);
             }
             return 1;
         }
@@ -5104,7 +5104,7 @@ impl Lower {
             }
             if unsafe { (*inner2).kind } != pm_jit_rsx_ast_kind::PATH {
                 unsafe {
-                    self.err(b"unsupported: enumerate value pattern\0".as_ptr(), unsafe { (*s).line });
+                    self.err(b"unsupported: enumerate value pattern\0".as_ptr(), (*s).line);
                 }
                 return 1;
             }
@@ -5112,7 +5112,7 @@ impl Lower {
             val_name = inner2;
         } else if unsafe { (*val_name).kind } != pm_jit_rsx_ast_kind::PATH {
             unsafe {
-                self.err(b"unsupported: enumerate value pattern\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"unsupported: enumerate value pattern\0".as_ptr(), (*s).line);
             }
             return 1;
         }
@@ -5232,7 +5232,7 @@ impl Lower {
         let btn = unsafe { self.expr_ctype(base, bt, 128, locals) };
         if btn == 0 {
             unsafe {
-                self.err(b"cannot infer enumerate receiver type\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"cannot infer enumerate receiver type\0".as_ptr(), (*s).line);
             }
             return 1;
         }
@@ -5261,7 +5261,7 @@ impl Lower {
                 }
             }
             unsafe {
-                self.err(b"unsupported: enumerate over a non-array (slices carry no length)\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"unsupported: enumerate over a non-array (slices carry no length)\0".as_ptr(), (*s).line);
             }
             return 1;
         }
@@ -5270,7 +5270,7 @@ impl Lower {
             || unsafe { (*pat).n_kids } as usize != 2
         {
             unsafe {
-                self.err(b"unsupported: enumerate pattern (expect (i, x) or (i, &x))\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"unsupported: enumerate pattern (expect (i, x) or (i, &x))\0".as_ptr(), (*s).line);
             }
             return 1;
         }
@@ -5287,7 +5287,7 @@ impl Lower {
         }
         if unsafe { (*idx_name).kind } != pm_jit_rsx_ast_kind::PATH {
             unsafe {
-                self.err(b"unsupported: enumerate index pattern\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"unsupported: enumerate index pattern\0".as_ptr(), (*s).line);
             }
             return 1;
         }
@@ -5316,7 +5316,7 @@ impl Lower {
             }
             if unsafe { (*inner2).kind } != pm_jit_rsx_ast_kind::PATH {
                 unsafe {
-                    self.err(b"unsupported: enumerate value pattern\0".as_ptr(), unsafe { (*s).line });
+                    self.err(b"unsupported: enumerate value pattern\0".as_ptr(), (*s).line);
                 }
                 return 1;
             }
@@ -5324,7 +5324,7 @@ impl Lower {
             val_name = inner2;
         } else if unsafe { (*val_name).kind } != pm_jit_rsx_ast_kind::PATH {
             unsafe {
-                self.err(b"unsupported: enumerate value pattern\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"unsupported: enumerate value pattern\0".as_ptr(), (*s).line);
             }
             return 1;
         }
@@ -5480,7 +5480,7 @@ impl Lower {
         }
         let mut is_struct_opt = false;
         let mut payload_buf = self.arena_tmp();
-        let mut payload_len = 0usize;
+        let mut payload_len: usize;
         if rn >= 8 && unsafe { z_eq(rbuf, 8, b"rsx_opt_\0".as_ptr()) } {
             is_struct_opt = true;
             let eb = self.arena_tmp();
@@ -5516,9 +5516,7 @@ impl Lower {
         }
         /* struct-Option out (payload in the opt table) or pointer out */
         let mut out_struct = false;
-        let mut out_ptr = false;
         if bn > 0 && unsafe { *bbuf.add(bn - 1) } == b'*' {
-            out_ptr = true;
         } else {
             out_struct = true;
             let slot = unsafe { self.opt_add(bbuf, bn) };
@@ -5618,7 +5616,7 @@ impl Lower {
         let rk = unsafe { (*recv).kids };
         let rname = unsafe { *rk.add(1) };
         if !(unsafe { (*rname).text_len } == 3
-            && unsafe { z_eq(unsafe { (*rname).text }, 3, b"map\0".as_ptr()) })
+            && unsafe { z_eq((*rname).text, 3, b"map\0".as_ptr()) })
         {
             return 0;
         }
@@ -5641,10 +5639,10 @@ impl Lower {
                 let seg_prev = unsafe { *mkp.add(mkn - 2) };
                 if unsafe { (*seg_last).kind } == pm_jit_rsx_ast_kind::PATH
                     && unsafe { (*seg_prev).kind } == pm_jit_rsx_ast_kind::PATH
-                    && ((unsafe { z_eq(unsafe { (*seg_last).text }, unsafe { (*seg_last).text_len }, b"as_str\0".as_ptr()) }
-                        && unsafe { z_eq(unsafe { (*seg_prev).text }, unsafe { (*seg_prev).text_len }, b"String\0".as_ptr()) })
-                        || (unsafe { z_eq(unsafe { (*seg_last).text }, unsafe { (*seg_last).text_len }, b"new\0".as_ptr()) }
-                            && unsafe { z_eq(unsafe { (*seg_prev).text }, unsafe { (*seg_prev).text_len }, b"Path\0".as_ptr()) }))
+                    && ((unsafe { z_eq((*seg_last).text, (*seg_last).text_len, b"as_str\0".as_ptr()) }
+                        && unsafe { z_eq((*seg_prev).text, (*seg_prev).text_len, b"String\0".as_ptr()) })
+                        || (unsafe { z_eq((*seg_last).text, (*seg_last).text_len, b"new\0".as_ptr()) }
+                            && unsafe { z_eq((*seg_prev).text, (*seg_prev).text_len, b"Path\0".as_ptr()) }))
                 {
                     as_str_fn = true;
                 }
@@ -5666,9 +5664,9 @@ impl Lower {
             let mra = unsafe { *mrk.add(2) };
             let mrn_len = unsafe { (*mrn).text_len };
             let is_iter = mrn_len == 4
-                && unsafe { z_eq(unsafe { (*mrn).text }, 4, b"iter\0".as_ptr()) };
+                && unsafe { z_eq((*mrn).text, 4, b"iter\0".as_ptr()) };
             let is_into = mrn_len == 9
-                && unsafe { z_eq(unsafe { (*mrn).text }, 9, b"into_iter\0".as_ptr()) };
+                && unsafe { z_eq((*mrn).text, 9, b"into_iter\0".as_ptr()) };
             if (is_iter || is_into) && (unsafe { (*mra).n_kids } as usize) == 0 {
                 base = unsafe { *mrk.add(0) };
             }
@@ -5724,7 +5722,7 @@ impl Lower {
                 }
             }
             unsafe {
-                self.err(b"unsupported: map-collect String::as_str on a non-String element\0".as_ptr(), unsafe { (*e).line });
+                self.err(b"unsupported: map-collect String::as_str on a non-String element\0".as_ptr(), (*e).line);
             }
             return 1;
         }
@@ -5766,7 +5764,7 @@ impl Lower {
         let cn = unsafe { (*clo).n_kids } as usize;
         if cn < 2 {
             unsafe {
-                self.err(b"unsupported: map-collect closure shape\0".as_ptr(), unsafe { (*e).line });
+                self.err(b"unsupported: map-collect closure shape\0".as_ptr(), (*e).line);
             }
             return 1;
         }
@@ -5774,7 +5772,7 @@ impl Lower {
         let body = unsafe { *ck.add(cn - 1) };
         if unsafe { (*param).kind } != pm_jit_rsx_ast_kind::PARAM {
             unsafe {
-                self.err(b"unsupported: map-collect closure shape\0".as_ptr(), unsafe { (*e).line });
+                self.err(b"unsupported: map-collect closure shape\0".as_ptr(), (*e).line);
             }
             return 1;
         }
@@ -5788,7 +5786,7 @@ impl Lower {
         if is_tup_param {
             if !(el >= 10 && unsafe { z_eq(eb, 10, b"rsx_tuple_\0".as_ptr()) }) {
                 unsafe {
-                    self.err(b"unsupported: map-collect tuple param on a non-tuple element\0".as_ptr(), unsafe { (*e).line });
+                    self.err(b"unsupported: map-collect tuple param on a non-tuple element\0".as_ptr(), (*e).line);
                 }
                 return 1;
             }
@@ -5801,7 +5799,7 @@ impl Lower {
                 || self.tup_counts[tup_slot] != tup_cnt
             {
                 unsafe {
-                    self.err(b"unsupported: map-collect tuple param arity\0".as_ptr(), unsafe { (*e).line });
+                    self.err(b"unsupported: map-collect tuple param arity\0".as_ptr(), (*e).line);
                 }
                 return 1;
             }
@@ -5837,14 +5835,14 @@ impl Lower {
         }
         if on == 0 || on >= 128 {
             unsafe {
-                self.err(b"unsupported: map-collect body type\0".as_ptr(), unsafe { (*e).line });
+                self.err(b"unsupported: map-collect body type\0".as_ptr(), (*e).line);
             }
             return 1;
         }
         let row = unsafe { self.vecs.intern(ob, on) };
         if row >= VEC_CAP {
             unsafe {
-                self.err(b"internal: map-collect output row overflow\0".as_ptr(), unsafe { (*e).line });
+                self.err(b"internal: map-collect output row overflow\0".as_ptr(), (*e).line);
             }
             return 1;
         }
@@ -5852,7 +5850,7 @@ impl Lower {
         let nn = unsafe { VecTab::name_for(row, nb, 96) };
         if nn == 0 || nn >= 128 {
             unsafe {
-                self.err(b"internal: map-collect row name\0".as_ptr(), unsafe { (*e).line });
+                self.err(b"internal: map-collect row name\0".as_ptr(), (*e).line);
             }
             return 1;
         }
@@ -6284,7 +6282,7 @@ impl Lower {
             let cn = unsafe { (*clo).n_kids } as usize;
             if cn < 2 {
                 unsafe {
-                    self.err(b"unsupported: split needs one bind and a body\0".as_ptr(), unsafe { (*s).line });
+                    self.err(b"unsupported: split needs one bind and a body\0".as_ptr(), (*s).line);
                 }
                 return 1;
             }
@@ -6299,7 +6297,7 @@ impl Lower {
             cbody = unsafe { *ck.add(cn - 1) };
             if unsafe { (*param).kind } != pm_jit_rsx_ast_kind::PARAM {
                 unsafe {
-                    self.err(b"unsupported: split closure bind\0".as_ptr(), unsafe { (*s).line });
+                    self.err(b"unsupported: split closure bind\0".as_ptr(), (*s).line);
                 }
                 return 1;
             }
@@ -6309,14 +6307,14 @@ impl Lower {
         /* the loop bind: one PATH identifier */
         if unsafe { (*pat).kind } != pm_jit_rsx_ast_kind::PATH {
             unsafe {
-                self.err(b"unsupported: split for binds one identifier\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"unsupported: split for binds one identifier\0".as_ptr(), (*s).line);
             }
             return 1;
         }
         let pk = unsafe { (*pat).kids };
         if (unsafe { (*pat).n_kids } as usize) < 1 {
             unsafe {
-                self.err(b"unsupported: split for bind\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"unsupported: split for bind\0".as_ptr(), (*s).line);
             }
             return 1;
         }
@@ -6490,14 +6488,14 @@ impl Lower {
         /* the loop bind: one PATH identifier */
         if unsafe { (*pat).kind } != pm_jit_rsx_ast_kind::PATH {
             unsafe {
-                self.err(b"unsupported: bytes for binds one identifier\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"unsupported: bytes for binds one identifier\0".as_ptr(), (*s).line);
             }
             return 1;
         }
         let pk = unsafe { (*pat).kids };
         if (unsafe { (*pat).n_kids } as usize) < 1 {
             unsafe {
-                self.err(b"unsupported: bytes for bind\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"unsupported: bytes for bind\0".as_ptr(), (*s).line);
             }
             return 1;
         }
@@ -6591,7 +6589,7 @@ impl Lower {
         let nk = unsafe { (*s).n_kids } as usize;
         if nk < 3 {
             unsafe {
-                self.err(b"bad for loop\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"bad for loop\0".as_ptr(), (*s).line);
             }
             return;
         }
@@ -6640,7 +6638,7 @@ impl Lower {
                 if ink2 >= 3 {
                     let nm = unsafe { *ik2.add(1) };
                     if unsafe { (*nm).text_len } == 12
-                        && unsafe { z_eq(unsafe { (*nm).text }, 12, b"char_indices\0".as_ptr()) }
+                        && unsafe { z_eq((*nm).text, 12, b"char_indices\0".as_ptr()) }
                     {
                         let argsn = unsafe { *ik2.add(2) };
                         if unsafe { (*argsn).n_kids } as usize == 0 {
@@ -6664,13 +6662,13 @@ impl Lower {
                                         let mut b0 = unsafe { *pk.add(0) };
                                         let mut b1 = unsafe { *pk.add(1) };
                                         if unsafe { (*b0).kind } == pm_jit_rsx_ast_kind::PATH
-                                            && unsafe { z_eq(unsafe { (*b0).text }, unsafe { (*b0).text_len }, b"path\0".as_ptr()) }
+                                            && unsafe { z_eq((*b0).text, (*b0).text_len, b"path\0".as_ptr()) }
                                             && unsafe { (*b0).n_kids } as usize == 1
                                         {
                                             b0 = unsafe { *(*b0).kids.add(0) };
                                         }
                                         if unsafe { (*b1).kind } == pm_jit_rsx_ast_kind::PATH
-                                            && unsafe { z_eq(unsafe { (*b1).text }, unsafe { (*b1).text_len }, b"path\0".as_ptr()) }
+                                            && unsafe { z_eq((*b1).text, (*b1).text_len, b"path\0".as_ptr()) }
                                             && unsafe { (*b1).n_kids } as usize == 1
                                         {
                                             b1 = unsafe { *(*b1).kids.add(0) };
@@ -6688,7 +6686,7 @@ impl Lower {
                                 }
                                 if !okpat {
                                     unsafe {
-                                        self.err(b"unsupported: char_indices pattern (expect two binds)\0".as_ptr(), unsafe { (*s).line });
+                                        self.err(b"unsupported: char_indices pattern (expect two binds)\0".as_ptr(), (*s).line);
                                     }
                                     return;
                                 }
@@ -6744,7 +6742,7 @@ impl Lower {
                 if ink3 >= 3 {
                     let nm3 = unsafe { *ik3.add(1) };
                     if unsafe { (*nm3).text_len } == 5
-                        && unsafe { z_eq(unsafe { (*nm3).text }, 5, b"chars\0".as_ptr()) }
+                        && unsafe { z_eq((*nm3).text, 5, b"chars\0".as_ptr()) }
                     {
                         let argsn3 = unsafe { *ik3.add(2) };
                         if unsafe { (*argsn3).n_kids } as usize == 0 {
@@ -6762,7 +6760,7 @@ impl Lower {
                                 let mut cvl3 = 0usize;
                                 let mut bnode3 = pat;
                                 if unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH
-                                    && unsafe { z_eq(unsafe { (*pat).text }, unsafe { (*pat).text_len }, b"path\0".as_ptr()) }
+                                    && unsafe { z_eq((*pat).text, (*pat).text_len, b"path\0".as_ptr()) }
                                     && unsafe { (*pat).n_kids } as usize == 1
                                 {
                                     bnode3 = unsafe { *(*pat).kids.add(0) };
@@ -6773,7 +6771,7 @@ impl Lower {
                                 }
                                 if cvl3 == 0 {
                                     unsafe {
-                                        self.err(b"unsupported: chars pattern (expect one bind)\0".as_ptr(), unsafe { (*s).line });
+                                        self.err(b"unsupported: chars pattern (expect one bind)\0".as_ptr(), (*s).line);
                                     }
                                     return;
                                 }
@@ -6826,23 +6824,23 @@ impl Lower {
         }
         if unsafe { (*iter).kind } != pm_jit_rsx_ast_kind::BINARY {
             unsafe {
-                self.err(b"unsupported: for over non-range iterator\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"unsupported: for over non-range iterator\0".as_ptr(), (*s).line);
             }
             return;
         }
-        if !unsafe { z_eq(unsafe { (*iter).text }, unsafe { (*iter).text_len }, b"..\0".as_ptr()) }
-            && !unsafe { z_eq(unsafe { (*iter).text }, unsafe { (*iter).text_len }, b"..=\0".as_ptr()) }
+        if !unsafe { z_eq((*iter).text, (*iter).text_len, b"..\0".as_ptr()) }
+            && !unsafe { z_eq((*iter).text, (*iter).text_len, b"..=\0".as_ptr()) }
         {
             unsafe {
-                self.err(b"unsupported: for over non-range iterator\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"unsupported: for over non-range iterator\0".as_ptr(), (*s).line);
             }
             return;
         }
-        let inclusive = unsafe { z_eq(unsafe { (*iter).text }, unsafe { (*iter).text_len }, b"..=\0".as_ptr()) };
+        let inclusive = unsafe { z_eq((*iter).text, (*iter).text_len, b"..=\0".as_ptr()) };
         let ikids = unsafe { (*iter).kids };
         if unsafe { (*iter).n_kids } < 2 {
             unsafe {
-                self.err(b"bad range in for\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"bad range in for\0".as_ptr(), (*s).line);
             }
             return;
         }
@@ -6854,12 +6852,12 @@ impl Lower {
          * predates labeled loops; unwrap to the segment.) */
         if unsafe { (*pat).kind } != pm_jit_rsx_ast_kind::PATH {
             unsafe {
-                self.err(b"unsupported: for pattern\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"unsupported: for pattern\0".as_ptr(), (*s).line);
             }
             return;
         }
         let mut bind = pat;
-        if unsafe { z_eq(unsafe { (*pat).text }, unsafe { (*pat).text_len }, b"path\0".as_ptr()) }
+        if unsafe { z_eq((*pat).text, (*pat).text_len, b"path\0".as_ptr()) }
             && unsafe { (*pat).n_kids } == 1
         {
             let pk = unsafe { (*pat).kids };
@@ -6878,7 +6876,7 @@ impl Lower {
         let mut ct_len = unsafe { self.expr_ctype(lo, ct, 128, locals) };
         if ct_len == 0 {
             unsafe {
-                self.err(b"cannot infer for-range bound type\0".as_ptr(), unsafe { (*s).line });
+                self.err(b"cannot infer for-range bound type\0".as_ptr(), (*s).line);
             }
             return;
         }

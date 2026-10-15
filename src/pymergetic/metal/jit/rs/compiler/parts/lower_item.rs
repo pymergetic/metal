@@ -250,7 +250,7 @@ impl Lower {
             unsafe {
                 self.err(
                     b"unsupported: struct value-dependency cycle or nesting too deep\0".as_ptr(),
-                    unsafe { (*item).line },
+                    (*item).line,
                 );
             }
             return;
@@ -293,7 +293,7 @@ impl Lower {
             unsafe {
                 self.err(
                     b"unsupported: struct by-value dep count over the order cap (32)\0".as_ptr(),
-                    unsafe { (*item).line },
+                    (*item).line,
                 );
             }
             return;
@@ -602,8 +602,8 @@ impl Lower {
                                 self.emit_declarator(
                                     ct,
                                     n,
-                                    unsafe { (*k).text },
-                                    unsafe { (*k).text_len },
+                                    (*k).text,
+                                    (*k).text_len,
                                 );
                             }
                             self.out.puts(b";\n\0".as_ptr());
@@ -693,7 +693,7 @@ impl Lower {
                 let mut i = 0usize;
                 let mut same = true;
                 while i < len {
-                    if unsafe { self.nt_names[s][i] } != unsafe { *name.add(i) } {
+                    if self.nt_names[s][i] != unsafe { *name.add(i) } {
                         same = false;
                         break;
                     }
@@ -738,7 +738,7 @@ impl Lower {
                 let mut i = 0usize;
                 let mut same = true;
                 while i < len {
-                    if unsafe { self.def_names[s][i] } != unsafe { *name.add(i) } {
+                    if self.def_names[s][i] != unsafe { *name.add(i) } {
                         same = false;
                         break;
                     }
@@ -1008,7 +1008,7 @@ impl Lower {
                 let mut same = true;
                 let mut i = 0usize;
                 while i < elen {
-                    if unsafe { self.opt_elems[s][i] } != unsafe { *elem.add(i) } {
+                    if self.opt_elems[s][i] != unsafe { *elem.add(i) } {
                         same = false;
                         break;
                     }
@@ -1072,7 +1072,7 @@ impl Lower {
                 let mut same = true;
                 let mut i = 0usize;
                 while i < okl {
-                    if unsafe { self.res_oks[s][i] } != unsafe { *okt.add(i) } {
+                    if self.res_oks[s][i] != unsafe { *okt.add(i) } {
                         same = false;
                         break;
                     }
@@ -1081,7 +1081,7 @@ impl Lower {
                 if same {
                     let mut j = 0usize;
                     while j < erl {
-                        if unsafe { self.res_errs[s][j] } != unsafe { *ert.add(j) } {
+                        if self.res_errs[s][j] != unsafe { *ert.add(j) } {
                             same = false;
                             break;
                         }
@@ -1296,7 +1296,7 @@ impl Lower {
                 let mut same = true;
                 let mut i = 0usize;
                 while i < nlen {
-                    if unsafe { self.st_names[s][i] } != unsafe { *name.add(i) } {
+                    if self.st_names[s][i] != unsafe { *name.add(i) } {
                         same = false;
                         break;
                     }
@@ -1349,7 +1349,7 @@ impl Lower {
                 let mut same = true;
                 let mut i = 0usize;
                 while i < nlen {
-                    if unsafe { self.st_names[s][i] } != unsafe { *name.add(i) } {
+                    if self.st_names[s][i] != unsafe { *name.add(i) } {
                         same = false;
                         break;
                     }
@@ -2019,7 +2019,7 @@ impl Lower {
                                         let mut k = 0usize;
                                         while k + 1 < pn0 {
                                             let seg = unsafe { *pk0.add(k) };
-                                            if unsafe { z_eq(unsafe { (*seg).text }, unsafe { (*seg).text_len }, b"ptr\0".as_ptr()) } {
+                                            if unsafe { z_eq((*seg).text, (*seg).text_len, b"ptr\0".as_ptr()) } {
                                                 ok_shape = true;
                                                 break;
                                             }

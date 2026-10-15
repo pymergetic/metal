@@ -114,7 +114,7 @@ impl Lower {
          * Pointer-Option None keeps the bare `0` render below. */
         if nk == 1 && self.cur_ret_len > 8 {
             let only = unsafe { *kids.add(0) };
-            if unsafe { z_eq(unsafe { (*only).text }, unsafe { (*only).text_len }, b"None\0".as_ptr()) } {
+            if unsafe { z_eq((*only).text, (*only).text_len, b"None\0".as_ptr()) } {
                 let eb = self.arena_tmp();
                 let eln = unsafe {
                     Lower::opt_typedef_elem(self.cur_ret.as_ptr(), self.cur_ret_len, eb, 160)
@@ -169,7 +169,7 @@ impl Lower {
                         /* size_of::<T>() arrives as a CALL node; bare path
                          * (function value) refuses. */
                         unsafe {
-                            self.err(b"unsupported: fn as value\0".as_ptr(), unsafe { (*e).line });
+                            self.err(b"unsupported: fn as value\0".as_ptr(), (*e).line);
                         }
                         return;
                     }
@@ -191,7 +191,7 @@ impl Lower {
                         return;
                     }
                     unsafe {
-                        self.err(b"unsupported: unknown Ordering variant\0".as_ptr(), unsafe { (*e).line });
+                        self.err(b"unsupported: unknown Ordering variant\0".as_ptr(), (*e).line);
                     }
                     return;
                 }
@@ -239,7 +239,7 @@ impl Lower {
                     if at > 0 {
                         at = unsafe { bput(full, 128, at, b"_\0".as_ptr(), 1) };
                     }
-                    at = unsafe { bput(full, 128, at, unsafe { (*seg).text }, unsafe { (*seg).text_len }) };
+                    at = unsafe { bput(full, 128, at, (*seg).text, (*seg).text_len) };
                     i += 1;
                 }
                 unsafe {
@@ -669,7 +669,7 @@ impl Lower {
                 /* the `..base` marker is not a field — a copy of an
                  * arbitrary base is never provably zero */
                 if unsafe { (*fnode).text_len } == 2
-                    && unsafe { z_eq(unsafe { (*fnode).text }, 2, b"..\0".as_ptr()) }
+                    && unsafe { z_eq((*fnode).text, 2, b"..\0".as_ptr()) }
                 {
                     return false;
                 }
@@ -716,7 +716,7 @@ impl Lower {
         {
             let only = unsafe { *(*v).kids.add(0) };
             if unsafe { (*only).kind } == pm_jit_rsx_ast_kind::PATH
-                && unsafe { z_eq(unsafe { (*only).text }, unsafe { (*only).text_len }, b"None\0".as_ptr()) }
+                && unsafe { z_eq((*only).text, (*only).text_len, b"None\0".as_ptr()) }
             {
                 if expect_len >= 8 && unsafe { z_eq(expect, 8, b"rsx_opt_\0".as_ptr()) } {
                     self.out.putc(b'(');
@@ -744,7 +744,7 @@ impl Lower {
                     && unsafe { (*callee).n_kids } as usize == 1
                 {
                     let cseg = unsafe { *(*callee).kids.add(0) };
-                    if unsafe { z_eq(unsafe { (*cseg).text }, unsafe { (*cseg).text_len }, b"Some\0".as_ptr()) }
+                    if unsafe { z_eq((*cseg).text, (*cseg).text_len, b"Some\0".as_ptr()) }
                     {
                         let args = unsafe { *vck.add(1) };
                         if unsafe { (*args).n_kids } as usize == 1 {
@@ -789,7 +789,7 @@ impl Lower {
         }
         if nk > TUP_MAXF {
             unsafe {
-                self.err(b"unsupported: tuple with more than 4 elements\0".as_ptr(), unsafe { (*e).line });
+                self.err(b"unsupported: tuple with more than 4 elements\0".as_ptr(), (*e).line);
             }
             return;
         }
@@ -809,14 +809,14 @@ impl Lower {
                 };
                 if tdn.is_null() {
                     unsafe {
-                        self.err(b"internal: tuple typedef name too long\0".as_ptr(), unsafe { (*e).line });
+                        self.err(b"internal: tuple typedef name too long\0".as_ptr(), (*e).line);
                     }
                     return;
                 }
                 let tdn_len = unsafe { Lower::tup_typedef_name(basep, blens, nk, tdn, need) };
                 if tdn_len == 0 {
                     unsafe {
-                        self.err(b"internal: tuple typedef name too long\0".as_ptr(), unsafe { (*e).line });
+                        self.err(b"internal: tuple typedef name too long\0".as_ptr(), (*e).line);
                     }
                     return;
                 }
@@ -839,7 +839,7 @@ impl Lower {
                     let eexpl = self.tup_lens[ea];
                     let v = unsafe { *kids.add(f2) };
                     let rendered = unsafe {
-                        self.emit_opt_elem(v, eexp, eexpl, locals, unsafe { (*e).line })
+                        self.emit_opt_elem(v, eexp, eexpl, locals, (*e).line)
                     };
                     if !rendered {
                         unsafe { self.emit_expr(v, locals) };
@@ -861,7 +861,7 @@ impl Lower {
                  * static string, so its own length is the z_len): a
                  * refusal chain that stops here must point at the
                  * poisoner, not just the tuple line */
-                let kb = unsafe { ast_kind_name(unsafe { (*kv).kind }) };
+                let kb = unsafe { ast_kind_name((*kv).kind) };
                 let mut kbl = 0usize;
                 while kbl < 24 && unsafe { *kb.add(kbl) } != 0 {
                     kbl += 1;
@@ -869,7 +869,7 @@ impl Lower {
                 unsafe {
                     self.err_let_name2(
                         b"cannot infer tuple element type - ascribe it\0".as_ptr(),
-                        unsafe { (*e).line },
+                        (*e).line,
                         kb,
                         kbl,
                         kb,
@@ -883,7 +883,7 @@ impl Lower {
         let slot = unsafe { self.tup_add(el_bufs.as_ptr(), el_lens.as_ptr(), nk) };
         if slot >= TUP_CAP {
             unsafe {
-                self.err(b"internal: too many tuple types\0".as_ptr(), unsafe { (*e).line });
+                self.err(b"internal: too many tuple types\0".as_ptr(), (*e).line);
             }
             return;
         }
@@ -897,14 +897,14 @@ impl Lower {
         };
         if tdn.is_null() {
             unsafe {
-                self.err(b"internal: tuple typedef name too long\0".as_ptr(), unsafe { (*e).line });
+                self.err(b"internal: tuple typedef name too long\0".as_ptr(), (*e).line);
             }
             return;
         }
         let tdn_len = unsafe { Lower::tup_typedef_name(base, blens, nk, tdn, need) };
         if tdn_len == 0 {
             unsafe {
-                self.err(b"internal: tuple typedef name too long\0".as_ptr(), unsafe { (*e).line });
+                self.err(b"internal: tuple typedef name too long\0".as_ptr(), (*e).line);
             }
             return;
         }
@@ -927,7 +927,7 @@ impl Lower {
             let eexpl = self.tup_lens[ea];
             let v = unsafe { *kids.add(f2) };
             let rendered = unsafe {
-                self.emit_opt_elem(v, eexp, eexpl, locals, unsafe { (*e).line })
+                self.emit_opt_elem(v, eexp, eexpl, locals, (*e).line)
             };
             if !rendered {
                 unsafe { self.emit_expr(v, locals) };
@@ -958,7 +958,7 @@ impl Lower {
         }
         if sl.is_null() {
             unsafe {
-                self.err(b"bad struct literal\0".as_ptr(), unsafe { (*lit).line });
+                self.err(b"bad struct literal\0".as_ptr(), (*lit).line);
             }
             return;
         }
@@ -978,7 +978,7 @@ impl Lower {
                 let sl2 = unsafe { (*seg).text_len };
                 if sl2 > 0 {
                     /* `Self { .. }` — the enclosing impl's type */
-                    if unsafe { z_eq(unsafe { (*seg).text }, sl2, b"Self\0".as_ptr()) }
+                    if unsafe { z_eq((*seg).text, sl2, b"Self\0".as_ptr()) }
                         && self.self_ty_len > 0
                     {
                         tname = self.self_ty.as_ptr();
@@ -993,7 +993,7 @@ impl Lower {
         }
         if tlen == 0 {
             unsafe {
-                self.err(b"bad struct literal type\0".as_ptr(), unsafe { (*lit).line });
+                self.err(b"bad struct literal type\0".as_ptr(), (*lit).line);
             }
             return;
         }
@@ -1010,7 +1010,7 @@ impl Lower {
                 let fnode = unsafe { *fk.add(j) };
                 if unsafe { (*fnode).kind } == pm_jit_rsx_ast_kind::STRUCT_FIELD
                     && unsafe { (*fnode).text_len } == 2
-                    && unsafe { z_eq(unsafe { (*fnode).text }, 2, b"..\0".as_ptr()) }
+                    && unsafe { z_eq((*fnode).text, 2, b"..\0".as_ptr()) }
                 {
                     up_base = unsafe { *fk.add(j + 1) };
                     break;
@@ -1061,7 +1061,7 @@ impl Lower {
                 let v = unsafe { *fk.add(i + 1) };
                 if unsafe { (*fnode).kind } == pm_jit_rsx_ast_kind::STRUCT_FIELD
                     && !(unsafe { (*fnode).text_len } == 2
-                        && unsafe { z_eq(unsafe { (*fnode).text }, 2, b"..\0".as_ptr()) })
+                        && unsafe { z_eq((*fnode).text, 2, b"..\0".as_ptr()) })
                 {
                     self.out.put(uvar, ul);
                     self.out.puts(b".\0".as_ptr());
@@ -1102,7 +1102,7 @@ impl Lower {
                 {
                     let only = unsafe { *(*v).kids.add(0) };
                     if unsafe { (*only).kind } == pm_jit_rsx_ast_kind::PATH
-                        && unsafe { z_eq(unsafe { (*only).text }, unsafe { (*only).text_len }, b"None\0".as_ptr()) }
+                        && unsafe { z_eq((*only).text, (*only).text_len, b"None\0".as_ptr()) }
                     {
                         let ct = self.arena_tmp();
                         let cl = unsafe {
@@ -1200,7 +1200,7 @@ impl Lower {
             if nk == 1 {
                 let seg = unsafe { *kids.add(0) };
                 if unsafe { (*seg).kind } == pm_jit_rsx_ast_kind::PATH {
-                    return unsafe { self.consts.lookup(unsafe { (*seg).text }, unsafe { (*seg).text_len }, found) };
+                    return unsafe { self.consts.lookup((*seg).text, (*seg).text_len, found) };
                 }
             }
             return 0;
@@ -1258,7 +1258,7 @@ impl Lower {
         let kind = unsafe { (*e).kind };
         match kind {
             pm_jit_rsx_ast_kind::LITERAL => {
-                unsafe { self.emit_literal(unsafe { (*e).text }, unsafe { (*e).text_len }) };
+                unsafe { self.emit_literal((*e).text, (*e).text_len) };
             }
             pm_jit_rsx_ast_kind::PATH => unsafe { self.emit_path_expr(e, locals) },
             pm_jit_rsx_ast_kind::EXPR_STMT => {
@@ -1427,7 +1427,7 @@ impl Lower {
                     let n = unsafe { self.const_eval(*kids.add(1), &mut found) };
                     if !found || n == 0 || n > 65536 {
                         unsafe {
-                            self.err(b"unsupported: array repeat count must be a constant expression\0".as_ptr(), unsafe { (*e).line });
+                            self.err(b"unsupported: array repeat count must be a constant expression\0".as_ptr(), (*e).line);
                         }
                         return;
                     }
@@ -1454,7 +1454,7 @@ impl Lower {
             pm_jit_rsx_ast_kind::TUPLE => unsafe { self.emit_tuple_expr(e, locals) },
             pm_jit_rsx_ast_kind::STRUCT_LIT => unsafe { self.emit_struct_lit(e, locals) },
             pm_jit_rsx_ast_kind::CLOSURE => unsafe {
-                self.err(b"unsupported: closure\0".as_ptr(), unsafe { (*e).line });
+                self.err(b"unsupported: closure\0".as_ptr(), (*e).line);
             },
             pm_jit_rsx_ast_kind::MACRO => unsafe {
                 /* vec![..] — emit the container ctor. The typing pass
@@ -1476,16 +1476,16 @@ impl Lower {
                     &mut list_n,
                 ) {
                     /* not a vec! — the write!/writeln! io macro is next */
-                    if unsafe { self.emit_write_macro(e, locals) } {
+                    if self.emit_write_macro(e, locals) {
                         return;
                     }
                     /* println!/eprintln!/print!/eprint! — the print family */
-                    if unsafe { self.emit_println_macro(e, locals) } {
+                    if self.emit_println_macro(e, locals) {
                         return;
                     }
                     /* the format! interpolation macro is
                      * the other expression macro the plane lowers */
-                    if unsafe { self.emit_format_value(e, locals) } {
+                    if self.emit_format_value(e, locals) {
                         return;
                     }
                     /* env!("NAME") — the getenv probe macro (see
@@ -1493,7 +1493,7 @@ impl Lower {
                     {
                         let mut en: *const u8 = core::ptr::null();
                         let mut enl: usize = 0;
-                        if unsafe { self.env_macro_name(unsafe { (*e).text }, unsafe { (*e).text_len }, &mut en, &mut enl) }
+                        if self.env_macro_name((*e).text, (*e).text_len, &mut en, &mut enl)
                             != 0
                         {
                             self.env_used = true;
@@ -1507,30 +1507,30 @@ impl Lower {
                             return;
                         }
                     }
-                    self.err(b"unsupported: expression macro\0".as_ptr(), unsafe { (*e).line });
+                    self.err(b"unsupported: expression macro\0".as_ptr(), (*e).line);
                     return;
                 }
                 if !self.ok {
                     return;
                 }
                 let tdn = self.arena_tmp();
-                let tdn_len = unsafe { VecTab::name_for(row, tdn, 96) };
+                let tdn_len = VecTab::name_for(row, tdn, 96);
                 if tdn_len == 0 {
-                    unsafe {
-                        self.err(b"internal: vec typedef name too long\0".as_ptr(), unsafe { (*e).line });
-                    }
+                    
+                        self.err(b"internal: vec typedef name too long\0".as_ptr(), (*e).line);
+                    
                     return;
                 }
                 /* the ELEMENT type — the row's interned spelling (the
                  * p pointer's pointee, the malloc/calloc unit) */
                 let eln = self.vecs.elem_lens[row];
                 if eln == 0 {
-                    unsafe {
-                        self.err(b"internal: vec row has no element type\0".as_ptr(), unsafe { (*e).line });
-                    }
+                    
+                        self.err(b"internal: vec row has no element type\0".as_ptr(), (*e).line);
+                    
                     return;
                 }
-                unsafe {
+                
                     self.out.puts(b"({ \0".as_ptr());
                     self.out.put(tdn, tdn_len);
                     self.out.puts(b" _r; _r.p = (\0".as_ptr());
@@ -1573,16 +1573,16 @@ impl Lower {
                     /* repeat form with a non-zero elem: fill loop */
                     if list_n == 0 && !count.is_null() {
                         let eb = self.arena_tmp();
-                        let en = unsafe { self.expr_ctype(elems[0], eb, 128, locals) };
+                        let en = self.expr_ctype(elems[0], eb, 128, locals);
                         if en == 0 {
                             return;
                         }
                         /* zero-literal elems keep calloc's zeros (vec![0..]) */
-                        let el = unsafe { (*elems[0]).text_len };
-                        let et = unsafe { (*elems[0]).text };
+                        let el = (*elems[0]).text_len;
+                        let et = (*elems[0]).text;
                         let is_zero_lit = el > 0
-                            && unsafe { *et == b'0' }
-                            && (el == 1 || unsafe { *et.add(1) == b'u' } || unsafe { *et.add(1) == b'i' });
+                            && *et == b'0'
+                            && (el == 1 || *et.add(1) == b'u' || *et.add(1) == b'i');
                         if !is_zero_lit {
                             self.out.puts(b" for (size_t _i = 0; _i < _r.n; _i++) _r.p[_i] = \0".as_ptr());
                             self.emit_expr(elems[0], locals);
@@ -1590,30 +1590,30 @@ impl Lower {
                         }
                     }
                     self.out.puts(b" _r; })\0".as_ptr());
-                }
+                
             },
             pm_jit_rsx_ast_kind::IF => unsafe {
                 /* value-position if: a two-branch value if lowers to the
                  * ternary `(cond ? tv : ev)`; branches that carry statements
                  * need a temp (`emit_if_value`) and refuse here. */
-                let kids = unsafe { (*e).kids };
-                let nk = unsafe { (*e).n_kids } as usize;
+                let kids = (*e).kids;
+                let nk = (*e).n_kids as usize;
                 if nk >= 3 {
-                    let tv = self.block_tail_node(unsafe { *kids.add(1) });
-                    let ev = self.block_tail_node(unsafe { *kids.add(2) });
+                    let tv = self.block_tail_node(*kids.add(1));
+                    let ev = self.block_tail_node(*kids.add(2));
                     self.out.putc(b'(');
-                    unsafe { self.emit_expr(*kids.add(0), locals) };
+                    self.emit_expr(*kids.add(0), locals);
                     self.out.puts(b" ? \0".as_ptr());
-                    unsafe { self.emit_expr(tv, locals) };
+                    self.emit_expr(tv, locals);
                     self.out.puts(b" : \0".as_ptr());
-                    unsafe { self.emit_expr(ev, locals) };
+                    self.emit_expr(ev, locals);
                     self.out.putc(b')');
                     return;
                 }
-                self.err(b"unsupported: value-position if without ascription\0".as_ptr(), unsafe { (*e).line });
+                self.err(b"unsupported: value-position if without ascription\0".as_ptr(), (*e).line);
             },
             pm_jit_rsx_ast_kind::MATCH => unsafe {
-                self.err(b"unsupported: value-position match without ascription\0".as_ptr(), unsafe { (*e).line });
+                self.err(b"unsupported: value-position match without ascription\0".as_ptr(), (*e).line);
             },
             pm_jit_rsx_ast_kind::BLOCK => {
                 /* value-position block (incl. `unsafe { .. }`): its tail
@@ -1666,7 +1666,7 @@ impl Lower {
                 }
             }
             _ => unsafe {
-                self.err(b"unsupported: expression form\0".as_ptr(), unsafe { (*e).line });
+                self.err(b"unsupported: expression form\0".as_ptr(), (*e).line);
             },
         }
     }
@@ -1684,8 +1684,8 @@ impl Lower {
         if unsafe { z_eq(op, op_len, b"==\0".as_ptr()) } || unsafe { z_eq(op, op_len, b"!=\0".as_ptr()) } {
             let l = unsafe { *kids.add(0) };
             let r = unsafe { *kids.add(1) };
-            let l_lit = unsafe { !l.is_null() } && unsafe { (*l).kind } == pm_jit_rsx_ast_kind::LITERAL && unsafe { (*l).text_len } >= 2 && unsafe { *(*l).text } == b'"';
-            let r_lit = unsafe { !r.is_null() } && unsafe { (*r).kind } == pm_jit_rsx_ast_kind::LITERAL && unsafe { (*r).text_len } >= 2 && unsafe { *(*r).text } == b'"';
+            let l_lit = !l.is_null() && unsafe { (*l).kind } == pm_jit_rsx_ast_kind::LITERAL && unsafe { (*l).text_len } >= 2 && unsafe { *(*l).text } == b'"';
+            let r_lit = !r.is_null() && unsafe { (*r).kind } == pm_jit_rsx_ast_kind::LITERAL && unsafe { (*r).text_len } >= 2 && unsafe { *(*r).text } == b'"';
             if l_lit || r_lit {
                 let other = if l_lit { r } else { l };
                 let ctb = self.arena_tmp();
@@ -1731,12 +1731,12 @@ impl Lower {
             let r = unsafe { *kids.add(1) };
             let lb = self.arena_tmp();
             let rb = self.arena_tmp();
-            let ln = if unsafe { !l.is_null() } {
+            let ln = if !l.is_null() {
                 unsafe { self.expr_ctype(l, lb, 128, locals) }
             } else {
                 0
             };
-            let rn = if unsafe { !r.is_null() } {
+            let rn = if !r.is_null() {
                 unsafe { self.expr_ctype(r, rb, 128, locals) }
             } else {
                 0
@@ -1946,7 +1946,7 @@ impl Lower {
              *    the fn's Err carrying the operand's ._e, yield ._v. The
              *    Err type travels unchanged (sink.rs's `String` error
              *    crosses apply_one -> apply_faces whole). */
-            let is_ptr_ret = self.cur_ret_len > 0 && unsafe { self.cur_ret[self.cur_ret_len - 1] } == b'*';
+            let is_ptr_ret = self.cur_ret_len > 0 && self.cur_ret[self.cur_ret_len - 1] == b'*';
             let is_opt_ret = self.cur_ret_len >= 8
                 && unsafe { z_eq(self.cur_ret.as_ptr(), 8, b"rsx_opt_\0".as_ptr()) };
             let is_res_ret = self.cur_ret_len >= 8
@@ -1955,7 +1955,7 @@ impl Lower {
                 unsafe {
                     self.err(
                         b"unsupported: ? outside a pointer-, Option- or Result-returning fn\0".as_ptr(),
-                        unsafe { (*e).line },
+                        (*e).line,
                     );
                 }
                 return;
@@ -1965,7 +1965,7 @@ impl Lower {
             let ct_len = unsafe { self.expr_ctype(operand, ct, 128, locals) };
             if ct_len == 0 || ct_len >= 128 {
                 unsafe {
-                    self.err(b"unsupported: ? on an untyped operand\0".as_ptr(), unsafe { (*e).line });
+                    self.err(b"unsupported: ? on an untyped operand\0".as_ptr(), (*e).line);
                 }
                 return;
             }
@@ -1998,7 +1998,7 @@ impl Lower {
                 unsafe {
                     self.err(
                         b"unsupported: ? on a non-pointer Option (payload must be a pointer)\0".as_ptr(),
-                        unsafe { (*e).line },
+                        (*e).line,
                     );
                 }
                 return;
@@ -2011,7 +2011,7 @@ impl Lower {
             return;
         }
         unsafe {
-            self.err(b"unsupported: unary operator\0".as_ptr(), unsafe { (*e).line });
+            self.err(b"unsupported: unary operator\0".as_ptr(), (*e).line);
         }
     }
 
@@ -2058,7 +2058,7 @@ impl Lower {
             let only = unsafe { *(*rhs).kids.add(0) };
             let is_none = unsafe { (*only).kind } == pm_jit_rsx_ast_kind::PATH
                 && unsafe {
-                    z_eq(unsafe { (*only).text }, unsafe { (*only).text_len }, b"None\0".as_ptr())
+                    z_eq((*only).text, (*only).text_len, b"None\0".as_ptr())
                 };
             /* Some(v): CALL node under the single PATH kid */
             let mut some_v: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
@@ -2073,8 +2073,8 @@ impl Lower {
                         let cseg = unsafe { *(*callee).kids.add(0) };
                         if unsafe {
                             z_eq(
-                                unsafe { (*cseg).text },
-                                unsafe { (*cseg).text_len },
+                                (*cseg).text,
+                                (*cseg).text_len,
                                 b"Some\0".as_ptr(),
                             )
                         } {
@@ -2128,7 +2128,7 @@ impl Lower {
                 {
                     let cseg = unsafe { *(*callee).kids.add(0) };
                     if unsafe {
-                        z_eq(unsafe { (*cseg).text }, unsafe { (*cseg).text_len }, b"Some\0".as_ptr())
+                        z_eq((*cseg).text, (*cseg).text_len, b"Some\0".as_ptr())
                     } {
                         let an = unsafe { (*av).n_kids } as usize;
                         if an == 1 {
@@ -2306,12 +2306,12 @@ impl Lower {
                                 && unsafe { (*val).kind } == pm_jit_rsx_ast_kind::UNARY
                                 && (unsafe { (*val).n_kids } as usize) >= 1
                                 && (unsafe {
-                                    z_eq(unsafe { (*val).text }, unsafe { (*val).text_len }, b"&\0".as_ptr())
+                                    z_eq((*val).text, (*val).text_len, b"&\0".as_ptr())
                                 }
                                     || unsafe {
                                         z_eq(
-                                            unsafe { (*val).text },
-                                            unsafe { (*val).text_len },
+                                            (*val).text,
+                                            (*val).text_len,
                                             b"&mut\0".as_ptr(),
                                         )
                                     })
@@ -2425,9 +2425,9 @@ impl Lower {
                 let s1 = unsafe { *ck2.add(1) };
                 let s2 = unsafe { *ck2.add(2) };
                 if unsafe { (*args).n_kids } as usize == 2
-                    && unsafe { z_eq(unsafe { (*s0).text }, unsafe { (*s0).text_len }, b"core\0".as_ptr()) }
-                    && unsafe { z_eq(unsafe { (*s1).text }, unsafe { (*s1).text_len }, b"slice\0".as_ptr()) }
-                    && unsafe { z_eq(unsafe { (*s2).text }, unsafe { (*s2).text_len }, b"from_raw_parts\0".as_ptr()) }
+                    && unsafe { z_eq((*s0).text, (*s0).text_len, b"core\0".as_ptr()) }
+                    && unsafe { z_eq((*s1).text, (*s1).text_len, b"slice\0".as_ptr()) }
+                    && unsafe { z_eq((*s2).text, (*s2).text_len, b"from_raw_parts\0".as_ptr()) }
                 {
                     let row = unsafe { self.arrs.intern(b"uint8_t\0".as_ptr(), 7) };
                     if row < ARR_CAP {
@@ -2450,9 +2450,9 @@ impl Lower {
                  * bytes are UTF-8 by the callers' contract); `.ok()` and
                  * the Some-bind take it from here. */
                 if unsafe { (*args).n_kids } as usize == 1
-                    && unsafe { z_eq(unsafe { (*s0).text }, unsafe { (*s0).text_len }, b"core\0".as_ptr()) }
-                    && unsafe { z_eq(unsafe { (*s1).text }, unsafe { (*s1).text_len }, b"str\0".as_ptr()) }
-                    && unsafe { z_eq(unsafe { (*s2).text }, unsafe { (*s2).text_len }, b"from_utf8\0".as_ptr()) }
+                    && unsafe { z_eq((*s0).text, (*s0).text_len, b"core\0".as_ptr()) }
+                    && unsafe { z_eq((*s1).text, (*s1).text_len, b"str\0".as_ptr()) }
+                    && unsafe { z_eq((*s2).text, (*s2).text_len, b"from_utf8\0".as_ptr()) }
                 {
                     let ak = unsafe { (*args).kids };
                     unsafe { self.emit_expr(*ak.add(0), locals) };
@@ -2482,7 +2482,7 @@ impl Lower {
                     if at > 0 {
                         at = unsafe { bput(full, 128, at, b"_\0".as_ptr(), 1) };
                     }
-                    at = unsafe { bput(full, 128, at, unsafe { (*seg).text }, unsafe { (*seg).text_len }) };
+                    at = unsafe { bput(full, 128, at, (*seg).text, (*seg).text_len) };
                     ci += 1;
                 }
                 if ok_join {
@@ -2497,7 +2497,7 @@ impl Lower {
                         let ename = self.arena_tmp();
                         let mut eat = 0usize;
                         eat = unsafe {
-                            bput(ename, 96, eat, unsafe { (*(*ck2.add(0))).text }, unsafe { (*(*ck2.add(0))).text_len })
+                            bput(ename, 96, eat, (*(*ck2.add(0))).text, (*(*ck2.add(0))).text_len)
                         };
                         unsafe {
                             *ename.add(eat) = 0;
@@ -2748,7 +2748,7 @@ impl Lower {
                         return;
                     }
                     unsafe {
-                        self.err(b"unsupported: size_of without a type here\0".as_ptr(), unsafe { (*e).line });
+                        self.err(b"unsupported: size_of without a type here\0".as_ptr(), (*e).line);
                     }
                     return;
                 }
@@ -2834,20 +2834,20 @@ impl Lower {
                  * then the value discards. Statement position gets the
                  * bare expr; value position gets the same thing as a
                  * statement expression yielding 0. */
-                if (unsafe { z_eq(unsafe { (*leaf).text }, unsafe { (*leaf).text_len }, b"drop\0".as_ptr()) }
+                if (unsafe { z_eq((*leaf).text, (*leaf).text_len, b"drop\0".as_ptr()) }
                     && (cn == 1
                         || (cn == 3
                             && unsafe {
                                 z_eq(
-                                    unsafe { (*(*ck.add(0))).text },
-                                    unsafe { (*(*ck.add(0))).text_len },
+                                    (*(*ck.add(0))).text,
+                                    (*(*ck.add(0))).text_len,
                                     b"core\0".as_ptr(),
                                 )
                             }
                             && unsafe {
                                 z_eq(
-                                    unsafe { (*(*ck.add(1))).text },
-                                    unsafe { (*(*ck.add(1))).text_len },
+                                    (*(*ck.add(1))).text,
+                                    (*(*ck.add(1))).text_len,
                                     b"mem\0".as_ptr(),
                                 )
                             })))
@@ -2866,9 +2866,9 @@ impl Lower {
                 if cn >= 3 {
                     let h0 = unsafe { *ck.add(0) };
                     let h1 = unsafe { *ck.add(1) };
-                    if unsafe { z_eq(unsafe { (*h0).text }, unsafe { (*h0).text_len }, b"core\0".as_ptr()) }
-                        && unsafe { z_eq(unsafe { (*h1).text }, unsafe { (*h1).text_len }, b"hint\0".as_ptr()) }
-                        && unsafe { z_eq(unsafe { (*leaf).text }, unsafe { (*leaf).text_len }, b"spin_loop\0".as_ptr()) }
+                    if unsafe { z_eq((*h0).text, (*h0).text_len, b"core\0".as_ptr()) }
+                        && unsafe { z_eq((*h1).text, (*h1).text_len, b"hint\0".as_ptr()) }
+                        && unsafe { z_eq((*leaf).text, (*leaf).text_len, b"spin_loop\0".as_ptr()) }
                         && unsafe { (*args).n_kids } as usize == 0
                     {
                         self.out.putc(b'0');
@@ -2880,8 +2880,8 @@ impl Lower {
                  * segment before `new` names the atomic (any depth). */
                 if cn >= 2 {
                     let wrap = unsafe { *ck.add(cn - 2) };
-                    if unsafe { z_eq(unsafe { (*wrap).text }, unsafe { (*wrap).text_len }, b"AtomicU32\0".as_ptr()) }
-                        && unsafe { z_eq(unsafe { (*leaf).text }, unsafe { (*leaf).text_len }, b"new\0".as_ptr()) }
+                    if unsafe { z_eq((*wrap).text, (*wrap).text_len, b"AtomicU32\0".as_ptr()) }
+                        && unsafe { z_eq((*leaf).text, (*leaf).text_len, b"new\0".as_ptr()) }
                         && unsafe { (*args).n_kids } as usize == 1
                     {
                         let ak2 = unsafe { (*args).kids };
@@ -2897,7 +2897,7 @@ impl Lower {
                  * value is the process exit status, and C main returns
                  * int — the struct wrapper is the cargo ABI, the kernel
                  * ABI is the integer. */
-                if unsafe { z_eq(unsafe { (*leaf).text }, unsafe { (*leaf).text_len }, b"from\0".as_ptr()) }
+                if unsafe { z_eq((*leaf).text, (*leaf).text_len, b"from\0".as_ptr()) }
                     && unsafe { (*args).n_kids } as usize == 1
                     && cn >= 2
                 {
@@ -2920,8 +2920,8 @@ impl Lower {
                  * copy-out, and invalid UTF-8 sequences in registry
                  * spellings are not a live path (the bytes come from C
                  * strings; the op copies them verbatim). */
-                if (unsafe { z_eq(unsafe { (*leaf).text }, unsafe { (*leaf).text_len }, b"from\0".as_ptr()) }
-                    || unsafe { z_eq(unsafe { (*leaf).text }, unsafe { (*leaf).text_len }, b"from_utf8_lossy\0".as_ptr()) })
+                if (unsafe { z_eq((*leaf).text, (*leaf).text_len, b"from\0".as_ptr()) }
+                    || unsafe { z_eq((*leaf).text, (*leaf).text_len, b"from_utf8_lossy\0".as_ptr()) })
                     && unsafe { (*args).n_kids } as usize == 1
                     && cn >= 2
                 {
@@ -2942,7 +2942,7 @@ impl Lower {
                  * (ascribed let / return / field init) supplies the type;
                  * as a bare expression the `{0}` compound literal is not
                  * typed, so the general zero-constructor path applies. */
-                if unsafe { z_eq(unsafe { (*leaf).text }, unsafe { (*leaf).text_len }, b"new\0".as_ptr()) }
+                if unsafe { z_eq((*leaf).text, (*leaf).text_len, b"new\0".as_ptr()) }
                     && unsafe { (*args).n_kids } as usize == 0
                     && cn >= 2
                 {
@@ -2969,7 +2969,7 @@ impl Lower {
                 /* `X::default()` — a #[derive(Default)] struct's zeroed
                  * ctor (any qualification depth). `Self::default()` in
                  * an impl resolves Self to the impl's type first. */
-                if unsafe { z_eq(unsafe { (*leaf).text }, unsafe { (*leaf).text_len }, b"default\0".as_ptr()) }
+                if unsafe { z_eq((*leaf).text, (*leaf).text_len, b"default\0".as_ptr()) }
                     && unsafe { (*args).n_kids } as usize == 0
                     && cn >= 2
                 {
@@ -2995,7 +2995,7 @@ impl Lower {
                  * copied. The declaration context supplies the row type;
                  * in a static initializer the all-zero path covers
                  * `Mutex::new(None)` (the zero IS a valid lock+None). */
-                if unsafe { z_eq(unsafe { (*leaf).text }, unsafe { (*leaf).text_len }, b"new\0".as_ptr()) }
+                if unsafe { z_eq((*leaf).text, (*leaf).text_len, b"new\0".as_ptr()) }
                     && unsafe { (*args).n_kids } as usize == 1
                     && cn >= 2
                 {
@@ -3063,7 +3063,7 @@ impl Lower {
                             unsafe {
                                 self.err(
                                     b"unsupported: None argument to an unknown callee - declare the fn or pass the Option explicitly\0".as_ptr(),
-                                    unsafe { (*e).line },
+                                    (*e).line,
                                 );
                             }
                             return;
@@ -3076,7 +3076,7 @@ impl Lower {
                             unsafe {
                                 self.err(
                                     b"unsupported: None argument - param type unknown\0".as_ptr(),
-                                    unsafe { (*e).line },
+                                    (*e).line,
                                 );
                             }
                             return;
@@ -3115,8 +3115,8 @@ impl Lower {
                                     let cseg2 = unsafe { *(*callee2).kids.add(0) };
                                     if unsafe {
                                         z_eq(
-                                            unsafe { (*cseg2).text },
-                                            unsafe { (*cseg2).text_len },
+                                            (*cseg2).text,
+                                            (*cseg2).text_len,
                                             b"Some\0".as_ptr(),
                                         )
                                     } {
@@ -3133,7 +3133,7 @@ impl Lower {
                                 unsafe {
                                     self.err(
                                         b"unsupported: Some argument to an unknown callee - declare the fn or pass the Option explicitly\0".as_ptr(),
-                                        unsafe { (*e).line },
+                                        (*e).line,
                                     );
                                 }
                                 return;
@@ -3146,7 +3146,7 @@ impl Lower {
                                 unsafe {
                                     self.err(
                                         b"unsupported: Some argument - param type unknown\0".as_ptr(),
-                                        unsafe { (*e).line },
+                                        (*e).line,
                                     );
                                 }
                                 return;
@@ -3532,7 +3532,7 @@ impl Lower {
             }
         }
         unsafe {
-            self.err(b"unsupported: call target\0".as_ptr(), unsafe { (*e).line });
+            self.err(b"unsupported: call target\0".as_ptr(), (*e).line);
         }
     }
 
@@ -3797,7 +3797,7 @@ impl Lower {
                     unsafe {
                         self.err(
                             b"unsupported: format! hole unterminated\0".as_ptr(),
-                            unsafe { (*e).line },
+                            (*e).line,
                         );
                     }
                     return false;
@@ -3815,7 +3815,7 @@ impl Lower {
                     unsafe {
                         self.err(
                             b"unsupported: format! hole has no argument\0".as_ptr(),
-                            unsafe { (*e).line },
+                            (*e).line,
                         );
                     }
                     return false;
@@ -3851,7 +3851,7 @@ impl Lower {
                     unsafe {
                         self.err(
                             b"unsupported: format! hole type\0".as_ptr(),
-                            unsafe { (*e).line },
+                            (*e).line,
                         );
                     }
                     return false;
@@ -4039,9 +4039,9 @@ impl Lower {
             while vh < 4
                 && unsafe { (*val).kind } == pm_jit_rsx_ast_kind::UNARY
                 && unsafe { (*val).n_kids } as usize >= 1
-                && (unsafe { z_eq(unsafe { (*val).text }, unsafe { (*val).text_len }, b"&\0".as_ptr()) }
+                && (unsafe { z_eq((*val).text, (*val).text_len, b"&\0".as_ptr()) }
                     || unsafe {
-                        z_eq(unsafe { (*val).text }, unsafe { (*val).text_len }, b"&mut\0".as_ptr())
+                        z_eq((*val).text, (*val).text_len, b"&mut\0".as_ptr())
                     })
             {
                 val = unsafe { *(*val).kids.add(0) };
@@ -4083,7 +4083,7 @@ impl Lower {
         unsafe {
             self.err(
                 b"unsupported: string append from a non-string value\0".as_ptr(),
-                unsafe { (*a).line },
+                (*a).line,
             );
         }
     }
@@ -4175,7 +4175,7 @@ impl Lower {
             let rk = unsafe { (*recv).kids };
             let rname = unsafe { *rk.add(1) };
             if unsafe { (*rname).text_len } == 7
-                && unsafe { z_eq(unsafe { (*rname).text }, 7, b"collect\0".as_ptr()) }
+                && unsafe { z_eq((*rname).text, 7, b"collect\0".as_ptr()) }
             {
                 let inner_recv = unsafe { *rk.add(0) };
                 if unsafe { (*inner_recv).kind } == pm_jit_rsx_ast_kind::METHOD_CALL
@@ -4185,7 +4185,7 @@ impl Lower {
                     let iname = unsafe { *ik.add(1) };
                     if unsafe { (*iname).text_len } == 16
                         && unsafe {
-                            z_eq(unsafe { (*iname).text }, 16, b"split_whitespace\0".as_ptr())
+                            z_eq((*iname).text, 16, b"split_whitespace\0".as_ptr())
                         }
                     {
                         let base = unsafe { *ik.add(0) };
@@ -4435,7 +4435,7 @@ impl Lower {
                 let rname = unsafe { *(*recv).kids.add(1) };
                 let rkids = unsafe { (*recv).kids };
                 if unsafe { (*rname).text_len } == 6
-                    && unsafe { z_eq(unsafe { (*rname).text }, 6, b"rsplit\0".as_ptr()) }
+                    && unsafe { z_eq((*rname).text, 6, b"rsplit\0".as_ptr()) }
                 {
                     let base = unsafe { *rkids.add(0) };
                     let rargs = unsafe { *rkids.add(2) };
@@ -4470,7 +4470,7 @@ impl Lower {
                                         unsafe {
                                             self.err(
                                                 b"internal: option typedef name too long\0".as_ptr(),
-                                                unsafe { (*e).line },
+                                                (*e).line,
                                             );
                                         }
                                         return;
@@ -4640,7 +4640,7 @@ impl Lower {
                                     unsafe {
                                         self.err(
                                             b"internal: option typedef name too long\0".as_ptr(),
-                                            unsafe { (*e).line },
+                                            (*e).line,
                                         );
                                     }
                                     return;
@@ -4696,7 +4696,7 @@ impl Lower {
                                     unsafe {
                                         self.err(
                                             b"internal: option typedef name too long\0".as_ptr(),
-                                            unsafe { (*e).line },
+                                            (*e).line,
                                         );
                                     }
                                     return;
@@ -4755,7 +4755,7 @@ impl Lower {
                                     unsafe {
                                         self.err(
                                             b"internal: option typedef name too long\0".as_ptr(),
-                                            unsafe { (*e).line },
+                                            (*e).line,
                                         );
                                     }
                                     return;
@@ -4876,7 +4876,7 @@ impl Lower {
                                 unsafe {
                                     self.err(
                                         b"internal: option typedef name too long\0".as_ptr(),
-                                        unsafe { (*e).line },
+                                        (*e).line,
                                     );
                                 }
                                 return;
@@ -4947,7 +4947,7 @@ impl Lower {
                                 unsafe {
                                     self.err(
                                         b"internal: option typedef name too long\0".as_ptr(),
-                                        unsafe { (*e).line },
+                                        (*e).line,
                                     );
                                 }
                                 return;
@@ -4997,7 +4997,7 @@ impl Lower {
                                 unsafe {
                                     self.err(
                                         b"internal: option typedef name too long\0".as_ptr(),
-                                        unsafe { (*e).line },
+                                        (*e).line,
                                     );
                                 }
                                 return;
@@ -5203,8 +5203,8 @@ impl Lower {
                             while hops < 2
                                 && unsafe { (*inner).kind } == pm_jit_rsx_ast_kind::UNARY
                                 && unsafe { (*inner).n_kids } as usize >= 1
-                                && (unsafe { z_eq(unsafe { (*inner).text }, unsafe { (*inner).text_len }, b"&\0".as_ptr()) }
-                                    || unsafe { z_eq(unsafe { (*inner).text }, unsafe { (*inner).text_len }, b"&mut\0".as_ptr()) })
+                                && (unsafe { z_eq((*inner).text, (*inner).text_len, b"&\0".as_ptr()) }
+                                    || unsafe { z_eq((*inner).text, (*inner).text_len, b"&mut\0".as_ptr()) })
                             {
                                 inner = unsafe { *(*inner).kids.add(0) };
                                 hops += 1;
@@ -5435,7 +5435,7 @@ impl Lower {
                         }
                     }
                     unsafe {
-                        self.err(b"unsupported: sort/dedup on non-String Vec elements\0".as_ptr(), unsafe { (*e).line });
+                        self.err(b"unsupported: sort/dedup on non-String Vec elements\0".as_ptr(), (*e).line);
                     }
                     return;
                 }
@@ -5516,7 +5516,7 @@ impl Lower {
                 let rk2 = unsafe { (*recv).kids };
                 let rname2 = unsafe { *rk2.add(1) };
                 if unsafe { (*rname2).text_len } == 5
-                    && unsafe { z_eq(unsafe { (*rname2).text }, 5, b"entry\0".as_ptr()) }
+                    && unsafe { z_eq((*rname2).text, 5, b"entry\0".as_ptr()) }
                 {
                     let mrecv = unsafe { *rk2.add(0) };
                     let margs = unsafe { *rk2.add(2) };
@@ -5580,7 +5580,7 @@ impl Lower {
                 let rk = unsafe { (*recv).kids };
                 let rname = unsafe { *rk.add(1) };
                 if unsafe { (*rname).text_len } == 3
-                    && unsafe { z_eq(unsafe { (*rname).text }, 3, b"get\0".as_ptr()) }
+                    && unsafe { z_eq((*rname).text, 3, b"get\0".as_ptr()) }
                 {
                     let grb = self.arena_tmp();
                     let grl = unsafe { self.expr_ctype(recv, grb, 128, locals) };
@@ -5852,8 +5852,8 @@ impl Lower {
                     let s1 = unsafe { *segs.add(1) };
                     if unsafe { (*s0).kind } == pm_jit_rsx_ast_kind::PATH
                         && unsafe { (*s1).kind } == pm_jit_rsx_ast_kind::PATH
-                        && unsafe { z_eq(unsafe { (*s0).text }, unsafe { (*s0).text_len }, b"io\0".as_ptr()) }
-                        && unsafe { z_eq(unsafe { (*s1).text }, unsafe { (*s1).text_len }, b"stdout\0".as_ptr()) }
+                        && unsafe { z_eq((*s0).text, (*s0).text_len, b"io\0".as_ptr()) }
+                        && unsafe { z_eq((*s1).text, (*s1).text_len, b"stdout\0".as_ptr()) }
                     {
                         self.unistd_used = true;
                         self.file_used = true;
@@ -5877,7 +5877,7 @@ impl Lower {
                     let segs = unsafe { (*rname).kids };
                     let s2 = unsafe { *segs.add(2) };
                     if unsafe { (*s2).kind } == pm_jit_rsx_ast_kind::PATH
-                        && unsafe { z_eq(unsafe { (*s2).text }, unsafe { (*s2).text_len }, b"var_os\0".as_ptr()) }
+                        && unsafe { z_eq((*s2).text, (*s2).text_len, b"var_os\0".as_ptr()) }
                     {
                         let argk = unsafe { *(*recv).kids.add(1) };
                         if (unsafe { (*argk).n_kids } as usize) == 1 {
@@ -5935,7 +5935,7 @@ impl Lower {
                     if unsafe { (*a0).kind } == pm_jit_rsx_ast_kind::UNARY {
                         let uk = unsafe { (*a0).kids };
                         if unsafe { (*a0).n_kids } as usize >= 1
-                            && (unsafe { z_eq(unsafe { (*a0).text }, unsafe { (*a0).text_len }, b"&\0".as_ptr()) })
+                            && (unsafe { z_eq((*a0).text, (*a0).text_len, b"&\0".as_ptr()) })
                         {
                             a0 = unsafe { *uk.add(0) };
                         }
@@ -6103,7 +6103,7 @@ impl Lower {
                     let c0n = unsafe { (*callee0).n_kids } as usize;
                     if c0n == 3 {
                         let r2 = unsafe { *c0k.add(2) };
-                        if unsafe { z_eq(unsafe { (*r2).text }, unsafe { (*r2).text_len }, b"from_utf8\0".as_ptr()) } {
+                        if unsafe { z_eq((*r2).text, (*r2).text_len, b"from_utf8\0".as_ptr()) } {
                         let tdn = self.arena_tmp();
                         let tdn_len = unsafe {
                             Lower::opt_typedef_name(b"rsx_str_ref_t\0".as_ptr(), 13, tdn, 160)
@@ -6174,7 +6174,7 @@ impl Lower {
                 unsafe {
                     self.err(
                         b"unsupported: atomic op on a non-atomic receiver\0".as_ptr(),
-                        unsafe { (*e).line },
+                        (*e).line,
                     );
                 }
                 return;
@@ -6325,7 +6325,7 @@ impl Lower {
                 return;
             }
             unsafe {
-                self.err(b"unsupported: fill on a non-array receiver\0".as_ptr(), unsafe { (*e).line });
+                self.err(b"unsupported: fill on a non-array receiver\0".as_ptr(), (*e).line);
             }
             return;
         }
@@ -6349,7 +6349,7 @@ impl Lower {
                 }
             }
             unsafe {
-                self.err(b"unsupported: cast needs a single type argument\0".as_ptr(), unsafe { (*e).line });
+                self.err(b"unsupported: cast needs a single type argument\0".as_ptr(), (*e).line);
             }
             return;
         }
@@ -6472,7 +6472,7 @@ impl Lower {
             && unsafe { z_eq(mname, mlen, b"map\0".as_ptr()) }
             && unsafe { (**ak.add(0)).kind } == pm_jit_rsx_ast_kind::CLOSURE
         {
-            if unsafe { self.try_emit_opt_map(recv, *ak.add(0), locals, unsafe { (*e).line }) } != 0 {
+            if unsafe { self.try_emit_opt_map(recv, *ak.add(0), locals, (*e).line) } != 0 {
                 return;
             }
         }
@@ -6486,7 +6486,7 @@ impl Lower {
                 || unsafe { z_eq(mname, mlen, b"position\0".as_ptr()) })
             && unsafe { (**ak.add(0)).kind } == pm_jit_rsx_ast_kind::CLOSURE
         {
-            if unsafe { self.try_emit_closure_loop(recv, mname, mlen, *ak.add(0), locals, unsafe { (*e).line }) } != 0 {
+            if unsafe { self.try_emit_closure_loop(recv, mname, mlen, *ak.add(0), locals, (*e).line) } != 0 {
                 return;
             }
         }
@@ -6621,7 +6621,7 @@ impl Lower {
                 }
             }
             unsafe {
-                self.err(b"unsupported: unwrap_or on a non-position chain\0".as_ptr(), unsafe { (*e).line });
+                self.err(b"unsupported: unwrap_or on a non-position chain\0".as_ptr(), (*e).line);
             }
             return;
         }
@@ -6659,7 +6659,7 @@ impl Lower {
                 }
             }
             unsafe {
-                self.err(b"unsupported: unwrap_or_else on a non-Option chain\0".as_ptr(), unsafe { (*e).line });
+                self.err(b"unsupported: unwrap_or_else on a non-Option chain\0".as_ptr(), (*e).line);
             }
             return;
         }
@@ -6963,7 +6963,7 @@ impl Lower {
                     return;
                 }
                 unsafe {
-                    self.err(b"unsupported: len() on a slice - pass lengths explicitly\0".as_ptr(), unsafe { (*e).line });
+                    self.err(b"unsupported: len() on a slice - pass lengths explicitly\0".as_ptr(), (*e).line);
                     self.err_parts(tbuf, tn, b"recv\0".as_ptr(), 4);
                 }
                 return;
@@ -7091,7 +7091,7 @@ impl Lower {
         unsafe {
             self.err_let_name(
                 b"unsupported: method call\0".as_ptr(),
-                unsafe { (*e).line },
+                (*e).line,
                 mname,
                 mlen,
             );
@@ -7140,7 +7140,7 @@ impl Lower {
                 return;
             }
             unsafe {
-                self.err(b"unsupported: .0 on a non-newtype base\0".as_ptr(), unsafe { (*e).line });
+                self.err(b"unsupported: .0 on a non-newtype base\0".as_ptr(), (*e).line);
             }
             return;
         }
@@ -7166,7 +7166,7 @@ impl Lower {
         } else {
             /* unknown base type — refuse rather than guess `.` vs `->`. */
             unsafe {
-                self.err(b"cannot infer field base type - ascribe it\0".as_ptr(), unsafe { (*e).line });
+                self.err(b"cannot infer field base type - ascribe it\0".as_ptr(), (*e).line);
             }
             return;
         }

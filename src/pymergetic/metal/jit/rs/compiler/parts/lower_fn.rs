@@ -50,8 +50,8 @@ impl Lower {
         /* self param detection (method) for the mangled free-fn name. */
         let has_self = n_params > 0
             && unsafe { z_eq(
-                unsafe { (*params[0]).text },
-                unsafe { (*params[0]).text_len },
+                (*params[0]).text,
+                (*params[0]).text_len,
                 b"self\0".as_ptr(),
             ) };
         let is_method = has_self;
@@ -68,7 +68,7 @@ impl Lower {
         }
         /* C type of the return */
         let ret_ct = self.arena_tmp();
-        let mut ret_len = 0usize;
+        let mut ret_len: usize;
         if !ret.is_null() {
             ret_len = unsafe { self.ctype(ret, ret_ct, 128) };
         } else {
@@ -451,7 +451,7 @@ impl Lower {
         }
         if ty_len == 0 {
             unsafe {
-                self.err(b"impl without a self type\0".as_ptr(), unsafe { (*item).line });
+                self.err(b"impl without a self type\0".as_ptr(), (*item).line);
             }
             return;
         }
@@ -474,7 +474,7 @@ impl Lower {
                 at = unsafe { bput(mname, 160, at, trait_name, trait_len) };
             }
             at = unsafe { bput(mname, 160, at, b"_\0".as_ptr(), 1) };
-            at = unsafe { bput(mname, 160, at, unsafe { (*k).text }, unsafe { (*k).text_len }) };
+            at = unsafe { bput(mname, 160, at, (*k).text, (*k).text_len) };
             unsafe {
                 *mname.add(at) = 0;
             }
@@ -638,7 +638,7 @@ impl Lower {
         }
         let mut s = 0usize;
         while s < self.opt_n {
-            if unsafe { self.opt_done[s] } {
+            if self.opt_done[s] {
                 s += 1;
                 continue;
             }
@@ -662,9 +662,9 @@ impl Lower {
                     self.out.puts(b" _v; bool _has; } \0".as_ptr());
                     self.out.put(tdn, tdn_len);
                     self.out.puts(b";\n\0".as_ptr());
-                    unsafe {
+                    
                         self.opt_done[s] = true;
-                    }
+                    
                 }
             }
             s += 1;
@@ -761,13 +761,15 @@ impl Lower {
      * pass's two-phase flush snapshots each table's n before rendering
      * fields — rows earlier passes interned (fn sigs the collect pass
      * rendered, whose deps may include the very struct being emitted,
+     #[allow(dead_code)]
      * which is only forward-declared at that moment) stay pending for
      * the file-scope fixpoint. */
+    #[allow(dead_code)]
     unsafe fn res_emit_rest_from(&mut self, from: usize) {
         let mut s = from;
         let mut flushed = false;
         while s < self.res_n {
-            if !unsafe { self.res_done[s] } {
+            if !self.res_done[s] {
                 let okt = self.res_oks[s].as_ptr();
                 let okl = self.res_ok_lens[s];
                 let ert = self.res_errs[s].as_ptr();
@@ -793,9 +795,9 @@ impl Lower {
                 self.out.puts(b" _e; bool _ok; } \0".as_ptr());
                 self.out.put(tdn, tdn_len);
                 self.out.puts(b";\n\0".as_ptr());
-                unsafe {
+                
                     self.res_done[s] = true;
-                }
+                
                 flushed = true;
             }
             s += 1;
@@ -817,7 +819,7 @@ impl Lower {
         }
         let mut s = 0usize;
         while s < self.opt_n {
-            if unsafe { self.opt_done[s] } {
+            if self.opt_done[s] {
                 s += 1;
                 continue;
             }
@@ -850,9 +852,9 @@ impl Lower {
                 self.out.puts(b" _v; bool _has; } \0".as_ptr());
                 self.out.put(tdn, tdn_len);
                 self.out.puts(b";\n\0".as_ptr());
-                unsafe {
+                
                     self.opt_done[s] = true;
-                }
+                
             }
             s += 1;
         }
@@ -865,7 +867,7 @@ impl Lower {
     unsafe fn opt_emit_fnp(&mut self) {
         let mut s = 0usize;
         while s < self.opt_n {
-            if unsafe { self.opt_done[s] } {
+            if self.opt_done[s] {
                 s += 1;
                 continue;
             }
@@ -888,9 +890,9 @@ impl Lower {
             self.out.puts(b" _v; bool _has; } \0".as_ptr());
             self.out.put(tdn, tdn_len);
             self.out.puts(b";\n\0".as_ptr());
-            unsafe {
+            
                 self.opt_done[s] = true;
-            }
+            
             s += 1;
         }
     }
@@ -901,7 +903,7 @@ impl Lower {
         let mut s = from;
         let mut flushed = false;
         while s < self.opt_n {
-            if !unsafe { self.opt_done[s] } {
+            if !self.opt_done[s] {
                 let elem = self.opt_elems[s].as_ptr();
                 let elen = self.opt_lens[s];
                 /* a payload naming an incomplete row/type waits for a
@@ -924,9 +926,9 @@ impl Lower {
                 self.out.puts(b" _v; bool _has; } \0".as_ptr());
                 self.out.put(tdn, tdn_len);
                 self.out.puts(b";\n\0".as_ptr());
-                unsafe {
+                
                     self.opt_done[s] = true;
-                }
+                
                 flushed = true;
             }
             s += 1;
@@ -999,7 +1001,7 @@ impl Lower {
         let mut s = 0usize;
         let mut flushed = false;
         while s < self.res_n {
-            if !unsafe { self.res_done[s] } {
+            if !self.res_done[s] {
                 let okt = self.res_oks[s].as_ptr();
                 let okl = self.res_ok_lens[s];
                 let ert = self.res_errs[s].as_ptr();
@@ -1028,9 +1030,9 @@ impl Lower {
                 self.out.puts(b" _e; bool _ok; } \0".as_ptr());
                 self.out.put(tdn, tdn_len);
                 self.out.puts(b";\n\0".as_ptr());
-                unsafe {
+                
                     self.res_done[s] = true;
-                }
+                
                 flushed = true;
             }
             s += 1;
@@ -1060,7 +1062,7 @@ impl Lower {
         self.out.puts(b"#include <stdlib.h>\n\0".as_ptr());
         let mut s = from;
         while s < self.vecs.n {
-            if !unsafe { self.vecs.done[s] } {
+            if !self.vecs.done[s] {
                 let elem = self.vecs.elems[s].as_ptr();
                 let elen = self.vecs.elem_lens[s];
                 /* a row over an incomplete element (a struct pass A has
@@ -1142,9 +1144,9 @@ impl Lower {
                 self.out.puts(b")); }\n\0".as_ptr());
                 self.out.puts(b"    return r;\n\0".as_ptr());
                 self.out.puts(b"}\n\0".as_ptr());
-                unsafe {
+                
                     self.vecs.done[s] = true;
-                }
+                
             }
             s += 1;
         }
@@ -1335,9 +1337,9 @@ impl Lower {
                 self.out.puts(b"_find(m, k);\n\0".as_ptr());
                 self.out.puts(b"    return p ? &p->val : 0;\n\0".as_ptr());
                 self.out.puts(b"}\n\0".as_ptr());
-                unsafe {
+                
                     self.btms.done[s] = true;
-                }
+                
             }
             s += 1;
         }
@@ -1356,7 +1358,7 @@ impl Lower {
         let mut s = from;
         let mut flushed = false;
         while s < self.arrs.n {
-            if !unsafe { self.arrs.done[s] } {
+            if !self.arrs.done[s] {
                 let elem = self.arrs.elems[s].as_ptr();
                 let elen = self.arrs.elem_lens[s];
                 /* a row over an incomplete unit type waits for the struct
@@ -1379,9 +1381,9 @@ impl Lower {
                 self.out.puts(b" *p; size_t n; } \0".as_ptr());
                 self.out.put(tdn, tdn_len);
                 self.out.puts(b";\n\0".as_ptr());
-                unsafe {
+                
                     self.arrs.done[s] = true;
-                }
+                
                 flushed = true;
             }
             s += 1;
@@ -1402,7 +1404,7 @@ impl Lower {
         let mut s = 0usize;
         let mut flushed = false;
         while s < self.arrs.n {
-            if !unsafe { self.arrs.done[s] } {
+            if !self.arrs.done[s] {
                 let elem = self.arrs.elems[s].as_ptr();
                 let elen = self.arrs.elem_lens[s];
                 if unsafe { self.row_dep_pending(elem, elen) } {
@@ -1422,9 +1424,9 @@ impl Lower {
                 self.out.puts(b" *p; size_t n; } \0".as_ptr());
                 self.out.put(tdn, tdn_len);
                 self.out.puts(b";\n\0".as_ptr());
-                unsafe {
+                
                     self.arrs.done[s] = true;
-                }
+                
                 flushed = true;
             }
             s += 1;
@@ -1748,7 +1750,7 @@ impl Lower {
         self.out.puts(b"extern void pm_util_lock_release(pm_util_lock_t *);\n\0".as_ptr());
         let mut s = 0usize;
         while s < self.locks.n {
-            if !unsafe { self.locks.done[s] } {
+            if !self.locks.done[s] {
                 let elem = self.locks.elems[s].as_ptr();
                 let elen = self.locks.elem_lens[s];
                 let tdn = self.arena_tmp();
@@ -1765,9 +1767,9 @@ impl Lower {
                 self.out.puts(b" value; } \0".as_ptr());
                 self.out.put(tdn, tdn_len);
                 self.out.puts(b";\n\0".as_ptr());
-                unsafe {
+                
                     self.locks.done[s] = true;
-                }
+                
             }
             s += 1;
         }
@@ -2028,7 +2030,7 @@ impl Lower {
                                             let head2 = unsafe { *pk2.add(0) };
                                             let bind2 = unsafe { *pk2.add(1) };
                                             if unsafe { (*head2).kind } == pm_jit_rsx_ast_kind::PATH
-                                                && unsafe { z_eq(unsafe { (*head2).text }, unsafe { (*head2).text_len }, b"Some\0".as_ptr()) }
+                                                && unsafe { z_eq((*head2).text, (*head2).text_len, b"Some\0".as_ptr()) }
                                             {
                                                 /* bind2 is a PATH wrapper whose .text is the kind
                                                  * label ("path") — the identifier is its kids[0]
@@ -2336,7 +2338,7 @@ impl Lower {
                          * single-segment bind pattern in */
                         let mut bnode = pat;
                         if unsafe { (*pat).kind } == pm_jit_rsx_ast_kind::PATH
-                            && unsafe { z_eq(unsafe { (*pat).text }, unsafe { (*pat).text_len }, b"path\0".as_ptr()) }
+                            && unsafe { z_eq((*pat).text, (*pat).text_len, b"path\0".as_ptr()) }
                             && unsafe { (*pat).n_kids } as usize == 1
                         {
                             bnode = unsafe { *(*pat).kids.add(0) };
@@ -2402,7 +2404,7 @@ impl Lower {
                 if !kid.is_null()
                     && unsafe { (*kid).kind } == pm_jit_rsx_ast_kind::TUPLE
                     && unsafe { (*kid).text_len } == 4
-                    && unsafe { z_eq(unsafe { (*kid).text }, 4, b"args\0".as_ptr()) }
+                    && unsafe { z_eq((*kid).text, 4, b"args\0".as_ptr()) }
                 {
                     /* the args container: walk ITS kids (each arg
                      * expr), never the container probe */
@@ -2663,9 +2665,9 @@ impl Lower {
         let nk = unsafe { (*file).n_kids } as usize;
         /* loop slots — declared once; each pass reassigns (Rust shadowing
          * per-pass would redeclare the same name in one C scope). */
-        let mut i = 0usize;
-        let mut item: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
-        let mut kind = pm_jit_rsx_ast_kind::FILE;
+        let mut i: usize;
+        let mut item: *const pm_jit_rsx_ast_t;
+        let mut kind: pm_jit_rsx_ast_kind;
         /* Batching: a failed item records its refusal and the pass keeps
          * scanning the remaining items, so one run reports every gap (the
          * old single-refusal abort cost one rebuild per error). Output is
@@ -2808,8 +2810,8 @@ impl Lower {
                     }
                 }
                 unsafe { self.lower_type_alias(item) };
-                unsafe { self.opt_emit_for(unsafe { (*item).text }, unsafe { (*item).text_len }) };
-                unsafe { self.tup_emit_for(kids, nk, unsafe { (*item).text }, unsafe { (*item).text_len }) };
+                unsafe { self.opt_emit_for((*item).text, (*item).text_len) };
+                unsafe { self.tup_emit_for(kids, nk, (*item).text, (*item).text_len) };
             }
             if !self.ok {
                 bad = true;
@@ -3103,9 +3105,9 @@ impl Lower {
                         let last = unsafe { *hk.add(hn - 1) };
                         let prev = unsafe { *hk.add(hn - 2) };
                         if unsafe { (*last).kind } == pm_jit_rsx_ast_kind::PATH
-                            && unsafe { z_eq(unsafe { (*last).text }, unsafe { (*last).text_len }, b"args\0".as_ptr()) }
+                            && unsafe { z_eq((*last).text, (*last).text_len, b"args\0".as_ptr()) }
                             && unsafe { (*prev).kind } == pm_jit_rsx_ast_kind::PATH
-                            && unsafe { z_eq(unsafe { (*prev).text }, unsafe { (*prev).text_len }, b"env\0".as_ptr()) }
+                            && unsafe { z_eq((*prev).text, (*prev).text_len, b"env\0".as_ptr()) }
                         {
                             self.env_args_used = true;
                             self.str_own_used = true;
@@ -3170,8 +3172,8 @@ impl Lower {
             let mut enl: usize = 0;
             if unsafe {
                 self.env_macro_name(
-                    unsafe { (*e).text },
-                    unsafe { (*e).text_len },
+                    (*e).text,
+                    (*e).text_len,
                     &mut en,
                     &mut enl,
                 )
@@ -3227,7 +3229,7 @@ impl Lower {
         let t = unsafe { self.traits.find(tname, tlen) };
         if t >= TRAIT_CAP {
             unsafe {
-                self.err(b"trait not collected\0".as_ptr(), unsafe { (*item).line });
+                self.err(b"trait not collected\0".as_ptr(), (*item).line);
             }
             return;
         }

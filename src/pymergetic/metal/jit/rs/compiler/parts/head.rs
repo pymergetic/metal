@@ -307,7 +307,7 @@ unsafe fn zput_num(buf: *mut u8, cap: usize, n_in: u32) -> usize {
     let mut digs = [0u8; 12];
     let mut n = n_in;
     let mut di = 0usize;
-    let mut j = 0usize;
+    let mut j: usize;
     let mut at = 0usize;
     if buf.is_null() || cap == 0 {
         return 0;

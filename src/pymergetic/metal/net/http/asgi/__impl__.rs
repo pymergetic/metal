@@ -120,11 +120,11 @@ unsafe extern "C" {
     fn pm_util_limits_detach(knob: *mut pm_util_limit_t) -> i32;
     fn pm_util_limits_grow(
         arena: *mut pm_util_mem_arena_t,
-        base: *mut u8,
+        base: *mut c_void,
         cap: *mut u32,
         item: u32,
         knob: *const pm_util_limit_t,
-    ) -> *mut u8;
+    ) -> *mut c_void;
 }
 
 unsafe extern "C" {
@@ -338,16 +338,16 @@ unsafe fn listen_room() -> bool {
             return false;
         }
         let mut c1 = cap;
-        let fds = pm_util_limits_grow(arena, *LISTEN_FDS_PTR.0.get() as *mut u8, &mut c1, 4,
+        let fds = pm_util_limits_grow(arena, *LISTEN_FDS_PTR.0.get() as *mut c_void, &mut c1, 4,
             SERVER_KNOB.0.get());
         if fds.is_null() {
             return false;
         }
         let mut c2 = cap;
-        let addrs = pm_util_limits_grow(arena, *LISTEN_ADDRS_PTR.0.get() as *mut u8, &mut c2, 4,
+        let addrs = pm_util_limits_grow(arena, *LISTEN_ADDRS_PTR.0.get() as *mut c_void, &mut c2, 4,
             SERVER_KNOB.0.get());
         let mut c3 = cap;
-        let ports = pm_util_limits_grow(arena, *LISTEN_PORTS_PTR.0.get() as *mut u8, &mut c3, 2,
+        let ports = pm_util_limits_grow(arena, *LISTEN_PORTS_PTR.0.get() as *mut c_void, &mut c3, 2,
             SERVER_KNOB.0.get());
         if addrs.is_null() || ports.is_null() {
             return false;
@@ -470,7 +470,7 @@ unsafe fn defers_room() -> bool {
             return false;
         }
         let mut c = cap;
-        let grown = pm_util_limits_grow(arena, *DEFERS_PTR.0.get() as *mut u8, &mut c,
+        let grown = pm_util_limits_grow(arena, *DEFERS_PTR.0.get() as *mut c_void, &mut c,
             core::mem::size_of::<Defer>() as u32, DEFER_KNOB.0.get());
         if grown.is_null() {
             return false;
@@ -942,7 +942,7 @@ fn conn_slot() -> Option<usize> {
         }
         if slot == usize::MAX {
             let mut c = cap as u32;
-            let grown = pm_util_limits_grow(arena, base as *mut u8, &mut c,
+            let grown = pm_util_limits_grow(arena, base as *mut c_void, &mut c,
                 core::mem::size_of::<*mut Conn>() as u32, CONN_KNOB.0.get());
             if grown.is_null() {
                 return None;

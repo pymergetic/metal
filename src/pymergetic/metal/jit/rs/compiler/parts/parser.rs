@@ -6,7 +6,9 @@
 struct Node {
     arena: *mut pm_util_mem_arena_t,
     errbuf: *mut u8,
+    #[allow(dead_code)]
     errcap: usize,
+    #[allow(dead_code)]
     errline: u32,
     ok: bool,
 }
@@ -349,7 +351,7 @@ unsafe fn cfg_eval(s: *const u8, len: usize, feats: *const u8) -> i32 {
         if (len >= 4 && z_eq(s, 3, b"all\0".as_ptr()) && *s.add(3) == b'(')
             || (len >= 4 && z_eq(s, 3, b"any\0".as_ptr()) && *s.add(3) == b'(')
         {
-            let is_all = unsafe { z_eq(s, 3, b"all\0".as_ptr()) };
+            let is_all = z_eq(s, 3, b"all\0".as_ptr());
             let mut i = 4usize;
             let mut depth = 1i32;
             let mut acc: i32 = if is_all { 1 } else { 0 };
@@ -591,7 +593,7 @@ impl Parser {
                     if j > start + 1 {
                         buf.putc(b' ');
                     }
-                    buf.put(unsafe { self.text(j) }, unsafe { self.text_len(j) });
+                    buf.put(self.text(j), self.text_len(j));
                     j += 1;
                 }
             }
@@ -676,7 +678,7 @@ impl Parser {
         if k == pm_jit_rsx_tok_kind::PUNCT {
             if unsafe { self.is_punct(self.at, b'*') } {
                 self.at += 1;
-                let mut kid: *mut pm_jit_rsx_ast_t = core::ptr::null_mut();
+                let mut kid: *mut pm_jit_rsx_ast_t;
                 if unsafe { self.is_kw(self.at, b"const\0".as_ptr()) } {
                     kid = unsafe { self.mk(pm_jit_rsx_ast_kind::TYPE, line, b"const\0".as_ptr(), 5) };
                     self.at += 1;
@@ -784,7 +786,7 @@ impl Parser {
                     self.at += 1;
                     let size: *mut pm_jit_rsx_ast_t;
                     if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::INT_LITERAL {
-                        size = unsafe { self.mk(pm_jit_rsx_ast_kind::LITERAL, unsafe { self.line(self.at) }, self.text(self.at), self.text_len(self.at)) };
+                        size = unsafe { self.mk(pm_jit_rsx_ast_kind::LITERAL, self.line(self.at), self.text(self.at), self.text_len(self.at)) };
                         self.at += 1;
                     } else if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::IDENT {
                         /* const name or const expr length (e.g. [T; N], [T; N * 8]).
@@ -801,7 +803,7 @@ impl Parser {
                                         || unsafe { self.is_punct(self.at, b'/') }))
                             {
                                 unsafe {
-                                    buf.put(unsafe { self.text(self.at) }, unsafe { self.text_len(self.at) });
+                                    buf.put(self.text(self.at), self.text_len(self.at));
                                 }
                                 self.at += 1;
                             } else {
@@ -1111,7 +1113,7 @@ impl Parser {
             }
             break;
         }
-        if unsafe { alts.n } == 1 {
+        if alts.n == 1 {
             let one: *mut pm_jit_rsx_ast_t = unsafe { *alts.fixed.as_ptr() };
             return one;
         }
@@ -1335,7 +1337,7 @@ impl Parser {
                         j += 1;
                     }
                 }
-                if unsafe { segs.n } == 0 {
+                if segs.n == 0 {
                     unsafe {
                         segs.add(first, self.arena);
                     }
@@ -1573,8 +1575,8 @@ impl Parser {
                 return lhs;
             }
             let k = unsafe { self.kind(self.at) };
-            let mut z: *const u8 = b"\0".as_ptr();
-            let mut zlen = 0usize;
+            let mut z: *const u8;
+            let mut zlen: usize;
             if k == pm_jit_rsx_tok_kind::EQ {
                 z = b"==\0".as_ptr();
                 zlen = 2;
@@ -1981,7 +1983,7 @@ impl Parser {
                 let name_node = unsafe {
                     self.mk(
                         pm_jit_rsx_ast_kind::PATH,
-                        unsafe { self.line(self.at) },
+                        self.line(self.at),
                         name,
                         name_len,
                     )
@@ -3623,7 +3625,7 @@ impl Parser {
             /* cfg-stripped statement: parsed-and-skipped, never lowered. */
             if !s.is_null()
                 && unsafe { (*s).kind } == pm_jit_rsx_ast_kind::STMT
-                && unsafe { z_eq(unsafe { (*s).text }, unsafe { (*s).text_len }, b"cfgskip\0".as_ptr()) }
+                && unsafe { z_eq((*s).text, (*s).text_len, b"cfgskip\0".as_ptr()) }
             {
                 if self.ok && self.at == before {
                     unsafe {
@@ -3977,7 +3979,7 @@ impl Parser {
      * `= init`, let-else (Some-patterns only), `;`. The LET node's text tag
      * is "let", or "letelse" when an else-block is present. */
     unsafe fn parse_let_rest(&mut self, line: u32, mut kids: Kids, is_some_pat: bool) -> *mut pm_jit_rsx_ast_t {
-        let mut ty: *mut pm_jit_rsx_ast_t = core::ptr::null_mut();
+        let mut ty: *mut pm_jit_rsx_ast_t;
         if unsafe { self.is_punct(self.at, b':') } {
             self.at += 1;
             ty = unsafe { self.parse_type() };
@@ -3985,7 +3987,7 @@ impl Parser {
                 kids.add(ty, self.arena);
             }
         }
-        let mut init: *mut pm_jit_rsx_ast_t = core::ptr::null_mut();
+        let mut init: *mut pm_jit_rsx_ast_t;
         if unsafe { self.is_punct(self.at, b'=') } {
             self.at += 1;
             init = unsafe { self.parse_expr() };
@@ -4438,6 +4440,14 @@ impl Parser {
                     self.at += 1;
                     break;
                 }
+                /* field attributes (`#[allow(dead_code)]`, ...): consumed,
+                 * not lowered — a lint marker, not a layout input. */
+                if unsafe { self.is_punct(self.at, b'#') } {
+                    let mut ak = Kids::new();
+                    unsafe {
+                        self.parse_outer_attrs(&mut ak);
+                    }
+                }
                 /* field visibility: `pub`, `pub(crate)`, `pub(super)` */
                 if unsafe { self.is_kw(self.at, b"pub\0".as_ptr()) } {
                     self.at += 1;
@@ -4629,7 +4639,7 @@ impl Parser {
                     let d = unsafe {
                         self.mk(
                             pm_jit_rsx_ast_kind::LITERAL,
-                            unsafe { self.line(self.at) },
+                            self.line(self.at),
                             self.text(self.at),
                             self.text_len(self.at),
                         )
@@ -5056,8 +5066,8 @@ impl Parser {
                 continue;
             }
             /* typed param: [mut] name : Type */
-            let mut pname: *const u8 = b"_\0".as_ptr();
-            let mut plen: usize = 1;
+            let mut pname: *const u8;
+            let mut plen: usize;
             if unsafe { self.is_kw(self.at, b"mut\0".as_ptr()) } {
                 self.at += 1;
             }
@@ -5108,7 +5118,7 @@ impl Parser {
             }
         }
         /* return type */
-        let mut ret: *mut pm_jit_rsx_ast_t = core::ptr::null_mut();
+        let mut ret: *mut pm_jit_rsx_ast_t;
         if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::ARROW {
             self.at += 1;
             ret = unsafe { self.parse_type() };
@@ -5418,10 +5428,23 @@ impl Parser {
                 unsafe {
                     self.parse_outer_attrs(&mut ik);
                 }
-                if unsafe { self.is_kw(self.at, b"fn\0".as_ptr()) } {
+                if unsafe { self.is_kw(self.at, b"pub\0".as_ptr()) } {
+                    unsafe {
+                        self.parse_vis(&mut ik);
+                    }
+                }
+                if unsafe { self.is_kw(self.at, b"fn\0".as_ptr()) }
+                    || unsafe { self.is_kw(self.at, b"unsafe\0".as_ptr()) } {
                     let f = unsafe { self.parse_fn(&mut ik, 0) };
                     unsafe {
                         body.add(f, self.arena);
+                    }
+                    continue;
+                }
+                if unsafe { self.is_kw(self.at, b"const\0".as_ptr()) } {
+                    let s = unsafe { self.parse_static(&mut ik, 0) };
+                    unsafe {
+                        body.add(s, self.arena);
                     }
                     continue;
                 }
@@ -5654,7 +5677,7 @@ impl Parser {
             if unsafe { self.is_punct(self.at, b';') } {
                 self.at += 1;
             }
-            return unsafe { self.mk(pm_jit_rsx_ast_kind::MACRO, unsafe { self.line(self.at) }, b"\0".as_ptr(), 0) };
+            return unsafe { self.mk(pm_jit_rsx_ast_kind::MACRO, self.line(self.at), b"\0".as_ptr(), 0) };
         }
         if unsafe { self.kind(self.at) } == pm_jit_rsx_tok_kind::MACRO_INVOC {
             /* paths like `pymergetic_wasmmod::PM_MOD_EXPORT_RS!(...)` lex as
@@ -5839,7 +5862,7 @@ impl Parser {
             }
             /* cfg-stripped item: parsed-and-skipped, never lowered. */
             if unsafe { (*item).kind } == pm_jit_rsx_ast_kind::STMT
-                && unsafe { z_eq(unsafe { (*item).text }, unsafe { (*item).text_len }, b"cfgskip\0".as_ptr()) }
+                && unsafe { z_eq((*item).text, (*item).text_len, b"cfgskip\0".as_ptr()) }
             {
                 continue;
             }
