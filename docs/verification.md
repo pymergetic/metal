@@ -35,7 +35,7 @@ until the output stops changing. Each stage guards one way the chain could lie:
 | 1. gen-1 | the **boot** compiler compiles the compiler |
 | 2. build self | the gen-1 C builds into the in-kernel "self" compiler |
 | 3. gen-2 | the **self** compiler compiles the compiler |
-| 4. fixed point | `gen-2 == gen-1` (byte-identical, **2,302,959 bytes**) |
+| 4. fixed point | `gen-2 == gen-1` (byte-identical, **2,373,603 bytes**) |
 | 4b. in-kernel object | self compiles `__impl__.rs`; TCC makes the object |
 | 4c. in-kernel link | the object **links**; the *linked* compiler reproduces gen-1 |
 | 5. corpus | boot and self agree on every fixture; goldens match when present |
@@ -49,14 +49,14 @@ in the compiler breaks the fixed point.
 ## 3. Self-host corpus
 
 ```
-tools/selfhost_corpus/*.rs -> *.c   # 15/15 byte-identical via ./build/selfhost_feed
+tools/selfhost_corpus/*.rs -> *.c   # 16/16 byte-identical via ./build/selfhost_feed
 ```
 
 Each fixture is a Rust slice that must lower to its checked-in `.c` golden
 **byte-for-byte**, on both the boot and the self compiler. The corpus pins the
 accepted subset feature-by-feature (sum types, `match`, iterators, `Result`/`?`,
 traits + dispatch, generics, `let`-destructuring, `macro_rules!`, closure-as-value,
-Result combinators, …).
+Result combinators, iterator adapter chains, …).
 
 ## 4. Seats (every platform)
 
@@ -85,6 +85,11 @@ Accepted (compiles + runs on every seat above): let/const/static, if/match with
 payloads, guards and struct variants, iterator `for`, sum types and `Result<T,E>`
 with `?` (including nested `?` across functions), Result combinators
 (`.is_ok()`/`.is_err()`/`.unwrap_or()`/`.unwrap_or_else()`/`.map()`/`.map_err()`),
+iterator adapter chains (`.iter().filter().map().collect()` in any adapter
+order, plus the `collect`/`count`/`sum`/`fold`/`for_each`/`all`/`any`/
+`position` terminals and the `map(|r| r.0)` tuple-field view — each chain
+fuses to ONE C walk, no materialized intermediates; the statement's `let`
+binds the terminal's result),
 struct/tuple/tuple-struct `let`-destructuring with `..`/`mut`, nested
 `fn`, traits + dynamic dispatch, generics (monomorphized), single-arity
 `macro_rules!`, and capture-less closures as values.
@@ -92,7 +97,13 @@ struct/tuple/tuple-struct `let`-destructuring with `..`/`mut`, nested
 Refused, with a precise diagnostic (deliberate — a refusal beats a wrong lowering):
 capturing closures **as a general value** (the synthesized fn is a plain C function
 with no env slot; captures only work where the closure body is inlined — the
-`.map`/`.all`/`.any`/`.position`/`.unwrap_or_else` combinators), `dyn Trait` trait
+`.map`/`.all`/`.any`/`.position`/`.unwrap_or_else` combinators), a lone
+`.filter()`/`.map()` with no terminal (nothing to fuse the chain with; the
+lone `.map().collect()` and `.all()` shapes keep their historical emitter),
+chains nested in a larger expression (the fused statement-expr lives at
+`let`/expression-statement level), a fn with more than 24 params (the
+signature table is 24 rows; past that it refuses rather than dropping the
+param and emitting a prototype that disagrees with every call), `dyn Trait` trait
 objects as first-class values, async blocks, and `macro_rules!` beyond one fixed
 arity. Each refusal names the construct so the boundary is discoverable.
 

@@ -6729,6 +6729,813 @@ impl Lower {
         1
     }
 
+    /* ---- iterator adapter chains ----
+     *
+     * `base.iter().filter(|x| pred).map(|x| body).collect::<Vec<T>>()` and
+     * friends: any run of filter/map adapters over a Vec/Arr-row/fixed-
+     * array base, ended by one terminal (collect/count/sum/fold/for_each/
+     * all/any/position). One statement expression, one loop, the stages
+     * inlined in execution order. Each map stage declares its own copy of
+     * the stream value under a unique spelling (__rsx_cN) and binds the
+     * closure's param name to the PREVIOUS stage's spelling through
+     * LocalTab's rename-shadow, so two `|x|` stages never collide; a
+     * filter stage declares nothing — its param names the stream value in
+     * place. The base is hoisted once (a row copy; arrays re-emit — the
+     * subset keeps call exprs side-effect-free).
+     *
+     * A lone `.map(..).collect()` and a zero-adapter all/any/position
+     * stay on their historical emitters (try_emit_map_collect /
+     * try_emit_closure_loop) — chain_claim declines exactly those shapes
+     * and the corpus pins their lowerings byte-for-byte. */
+
+    /* The element spelling of a chain base: a Vec/Arr row (possibly
+     * behind a ` *` — a &Vec<T>/&mut Vec<T> param is the row pointer) or
+     * a fixed array `T [N]`. Copies the element spelling into el and
+     * reports the access shape — is_row (the .n/.p shape vs subscript)
+     * and behind (the base spells a pointer to the row). Returns the
+     * element spelling length (0 = not a chain base — the caller
+     * declines). */
+    unsafe fn chain_base_elem(
+        &mut self,
+        base: *const pm_jit_rsx_ast_t,
+        locals: *mut LocalTab,
+        el: *mut u8,
+        elcap: usize,
+        is_row: &mut bool,
+        behind: &mut bool,
+    ) -> usize {
+        let bt = self.arena_tmp();
+        let btn = unsafe { self.expr_ctype(base, bt, 128, locals) };
+        if btn == 0 {
+            return 0;
+        }
+        let mut b0 = 0usize;
+        if btn > 6 && unsafe { z_eq(bt, 6, b"const \0".as_ptr()) } {
+            b0 = 6;
+        }
+        let mut w = btn - b0;
+        let mut bh = false;
+        if w > 2 && unsafe { *bt.add(btn - 1) } == b'*' {
+            w -= 2;
+            bh = true;
+        }
+        let mut outl = 0usize;
+        let mut row = false;
+        if w > 8 && unsafe { z_eq(bt.add(b0), 8, b"rsx_vec_\0".as_ptr()) } {
+            let vs = unsafe { self.vecs.find_by_name(bt.add(b0), w) };
+            if vs < VEC_CAP {
+                let el2 = self.vecs.elem_lens[vs];
+                if el2 > 0 && el2 < elcap {
+                    let mut j = 0usize;
+                    while j < el2 {
+                        unsafe {
+                            *el.add(j) = self.vecs.elems[vs][j];
+                        }
+                        j += 1;
+                    }
+                    outl = el2;
+                    row = true;
+                }
+            }
+        } else if w > 8 && unsafe { z_eq(bt.add(b0), 8, b"rsx_arr_\0".as_ptr()) } {
+            let rs = unsafe { self.arrs.find_by_name(bt.add(b0), w) };
+            if rs < ARR_CAP {
+                let el2 = self.arrs.elem_lens[rs];
+                if el2 > 0 && el2 < elcap {
+                    let mut j = 0usize;
+                    while j < el2 {
+                        unsafe {
+                            *el.add(j) = self.arrs.elems[rs][j];
+                        }
+                        j += 1;
+                    }
+                    outl = el2;
+                    row = true;
+                }
+            }
+        } else if !bh {
+            /* fixed array `T [N]` — the element is everything before `[` */
+            let mut i = 0usize;
+            while i < btn {
+                if unsafe { *bt.add(i) } == b'[' {
+                    outl = i;
+                    break;
+                }
+                i += 1;
+            }
+            if outl > 0 && outl < elcap {
+                let mut j = 0usize;
+                while j < outl {
+                    unsafe {
+                        *el.add(j) = *bt.add(j);
+                    }
+                    j += 1;
+                }
+            } else {
+                outl = 0;
+            }
+        }
+        if outl > 0 {
+            unsafe {
+                *el.add(outl) = 0;
+                *is_row = row;
+                *behind = row && bh;
+            }
+        }
+        outl
+    }
+
+    /* The type walk of a chain — shared by the emitter's first pass and
+     * expr_ctype's chain_ctype. Registers each stage's bind while typing
+     * its body (the param names the PREVIOUS stream value) and fills
+     * st_ct/st_ctl with the stream type per stage (index 0 the base
+     * element; nst + 1 slots written). rbuf receives the terminal's
+     * result spelling and rlen its length (0 = the unit for_each
+     * terminal). init_ct/init_ctl is the fold init's type, typed by the
+     * caller in the OUTER scope (the chain's stages do not exist for it).
+     * Returns 1 when the chain types, 2 when the base is not a container
+     * at all (no diagnostic — a user type with its own count()/sum()
+     * method is not a chain; the caller falls through), 0 when the chain
+     * refuses (a specific diagnostic reported — the emitter claimed the
+     * shape, so a decline here is a refusal, not a fall-through). Every
+     * buffer must come from stable_tmp: the spellings outlive the probes
+     * the bodies run.
+     * The caller's registration scope is pushed and popped here. */
+    unsafe fn chain_walk_types(
+        &mut self,
+        base: *const pm_jit_rsx_ast_t,
+        kinds: *mut u8,
+        sargs: *mut *const pm_jit_rsx_ast_t,
+        nst: usize,
+        term: u8,
+        init_ct: *const u8,
+        init_ctl: usize,
+        tparams: *mut *const pm_jit_rsx_ast_t,
+        tbody: *const pm_jit_rsx_ast_t,
+        locals: *mut LocalTab,
+        st_ct: *mut *mut u8,
+        st_ctl: *mut usize,
+        rbuf: *mut u8,
+        rlen: &mut usize,
+        line: u32,
+    ) -> usize {
+        unsafe {
+            (*locals).note_scope();
+        }
+        let saved_pre = self.pre_pool_at;
+        let eb = self.stable_tmp();
+        let mut is_row = false;
+        let mut behind = false;
+        let elen = unsafe { self.chain_base_elem(base, locals, eb, 160, &mut is_row, &mut behind) };
+        if elen == 0 {
+            /* not a container base at all: a user type with its own
+             * count()/sum() method, an unknown-typed expression — not
+             * this emitter's shape, no diagnostic */
+            self.pre_pool_at = saved_pre;
+            unsafe {
+                (*locals).drop_scope();
+            }
+            return 2;
+        }
+        unsafe {
+            *st_ct.add(0) = eb;
+            *st_ctl.add(0) = elen;
+        }
+        let mut cur = 0usize;
+        let mut i = 0usize;
+        while i < nst {
+            let mut sp: [*const pm_jit_rsx_ast_t; 1] = [core::ptr::null()];
+            let mut sb: *const pm_jit_rsx_ast_t = core::ptr::null();
+            let spn = unsafe { closure_params(*sargs.add(i), sp.as_mut_ptr(), 1, &mut sb) };
+            let mut okp = spn == 1;
+            if okp {
+                let pname = unsafe { (*sp[0]).text };
+                let plen = unsafe { (*sp[0]).text_len };
+                if plen == 3 && unsafe { z_eq(pname, 3, b"tup\0".as_ptr()) } {
+                    okp = false;
+                }
+            }
+            if !okp {
+                self.pre_pool_at = saved_pre;
+                unsafe {
+                    (*locals).drop_scope();
+                    self.err(
+                        b"unsupported: chain adapter closure needs one plain bind and a body\0"
+                            .as_ptr(),
+                        line,
+                    );
+                }
+                return 0;
+            }
+            let pname = unsafe { (*sp[0]).text };
+            let plen = unsafe { (*sp[0]).text_len };
+            unsafe {
+                (*locals).add(pname, plen, *st_ct.add(cur), *st_ctl.add(cur), self.depth + 1);
+            }
+            let kind = unsafe { *kinds.add(i) };
+            if kind == CHAIN_STAGE_FILTER {
+                let pb = self.arena_tmp();
+                let pn = unsafe { self.expr_ctype(sb, pb, 128, locals) };
+                if pn == 0 {
+                    self.pre_pool_at = saved_pre;
+                    unsafe {
+                        (*locals).drop_scope();
+                        self.err(b"unsupported: filter predicate type\0".as_ptr(), line);
+                    }
+                    return 0;
+                }
+                /* the filter keeps the stream: type and spelling carry */
+                unsafe {
+                    *st_ct.add(cur + 1) = *st_ct.add(cur);
+                    *st_ctl.add(cur + 1) = *st_ctl.add(cur);
+                }
+            } else if kind == CHAIN_STAGE_MAP {
+                let tb = self.stable_tmp();
+                let tn = unsafe { self.expr_ctype(sb, tb, 160, locals) };
+                if tn == 0 {
+                    self.pre_pool_at = saved_pre;
+                    unsafe {
+                        (*locals).drop_scope();
+                        self.err(b"unsupported: map body type\0".as_ptr(), line);
+                    }
+                    return 0;
+                }
+                unsafe {
+                    *st_ct.add(cur + 1) = tb;
+                    *st_ctl.add(cur + 1) = tn;
+                }
+            } else {
+                /* the borrow view: the stream must be one owned String */
+                let mut is_str = false;
+                if unsafe { *st_ctl.add(cur) } == 9 {
+                    is_str = unsafe { z_eq(*st_ct.add(cur), 9, b"rsx_str_t\0".as_ptr()) };
+                }
+                if !is_str {
+                    self.pre_pool_at = saved_pre;
+                    unsafe {
+                        (*locals).drop_scope();
+                        self.err(
+                            b"unsupported: map String::as_str on a non-String element\0".as_ptr(),
+                            line,
+                        );
+                    }
+                    return 0;
+                }
+                self.str_ref_used = true;
+                self.str_own_used = true;
+                let vb = self.stable_tmp();
+                unsafe {
+                    zput(vb, 160, 0, b"rsx_str_ref_t\0".as_ptr());
+                    *st_ct.add(cur + 1) = vb;
+                    *st_ctl.add(cur + 1) = 13;
+                }
+            }
+            cur += 1;
+            i += 1;
+        }
+        /* the terminal: its own bind(s) name the final stream value (the
+         * fold's acc bind is the accumulator, typed by its init) */
+        let mut rln = 0usize;
+        if term == CHAIN_T_FOREACH {
+            let t0 = unsafe { *tparams };
+            unsafe {
+                (*locals).add(
+                    (*t0).text,
+                    (*t0).text_len,
+                    *st_ct.add(cur),
+                    *st_ctl.add(cur),
+                    self.depth + 1,
+                );
+            }
+            let pb = self.arena_tmp();
+            let _pn = unsafe { self.expr_ctype(tbody, pb, 128, locals) };
+            /* a unit side effect (`dst.push(y)`, `total += y`) carries no
+             * ctype — the body emits as a statement; a genuinely broken
+             * body refuses at its own emit */
+        } else if term == CHAIN_T_ALL || term == CHAIN_T_ANY || term == CHAIN_T_POSITION {
+            let t0 = unsafe { *tparams };
+            unsafe {
+                (*locals).add(
+                    (*t0).text,
+                    (*t0).text_len,
+                    *st_ct.add(cur),
+                    *st_ctl.add(cur),
+                    self.depth + 1,
+                );
+            }
+            let pb = self.arena_tmp();
+            let pn = unsafe { self.expr_ctype(tbody, pb, 128, locals) };
+            if pn == 0 {
+                self.pre_pool_at = saved_pre;
+                unsafe {
+                    (*locals).drop_scope();
+                    self.err(b"unsupported: chain predicate type\0".as_ptr(), line);
+                }
+                return 0;
+            }
+            rln = unsafe {
+                if term == CHAIN_T_POSITION {
+                    /* position() is an index — the emitter's __rsx_p */
+                    zput(rbuf, 160, 0, b"size_t\0".as_ptr())
+                } else {
+                    zput(rbuf, 160, 0, b"bool\0".as_ptr())
+                }
+            };
+        } else if term == CHAIN_T_FOLD {
+            let t0 = unsafe { *tparams };
+            let t1 = unsafe { *tparams.add(1) };
+            unsafe {
+                (*locals).add((*t0).text, (*t0).text_len, init_ct, init_ctl, self.depth + 1);
+                (*locals).add(
+                    (*t1).text,
+                    (*t1).text_len,
+                    *st_ct.add(cur),
+                    *st_ctl.add(cur),
+                    self.depth + 1,
+                );
+            }
+            let fb = self.stable_tmp();
+            let fln = unsafe { self.expr_ctype(tbody, fb, 160, locals) };
+            if fln == 0 {
+                self.pre_pool_at = saved_pre;
+                unsafe {
+                    (*locals).drop_scope();
+                    self.err(b"unsupported: fold body type\0".as_ptr(), line);
+                }
+                return 0;
+            }
+            let mut j = 0usize;
+            while j < fln {
+                unsafe {
+                    *rbuf.add(j) = *fb.add(j);
+                }
+                j += 1;
+            }
+            unsafe {
+                *rbuf.add(fln) = 0;
+            }
+            rln = fln;
+        } else if term == CHAIN_T_COLLECT {
+            let row = unsafe { self.vecs.intern(*st_ct.add(cur), *st_ctl.add(cur)) };
+            if row >= VEC_CAP {
+                self.pre_pool_at = saved_pre;
+                unsafe {
+                    (*locals).drop_scope();
+                    self.err(b"internal: chain collect row overflow\0".as_ptr(), line);
+                }
+                return 0;
+            }
+            let nn = unsafe { VecTab::name_for(row, rbuf, 160) };
+            if nn == 0 || nn >= 160 {
+                self.pre_pool_at = saved_pre;
+                unsafe {
+                    (*locals).drop_scope();
+                    self.err(b"internal: chain collect row name\0".as_ptr(), line);
+                }
+                return 0;
+            }
+            rln = nn;
+        } else if term == CHAIN_T_COUNT || term == CHAIN_T_POSITION {
+            rln = unsafe { zput(rbuf, 160, 0, b"size_t\0".as_ptr()) };
+        } else if term == CHAIN_T_SUM {
+            if !unsafe { ctype_is_arith(*st_ct.add(cur), *st_ctl.add(cur)) } {
+                self.pre_pool_at = saved_pre;
+                unsafe {
+                    (*locals).drop_scope();
+                    self.err(
+                        b"unsupported: .sum() over a non-arithmetic element\0".as_ptr(),
+                        line,
+                    );
+                }
+                return 0;
+            }
+            let sl: usize = unsafe { *st_ctl.add(cur) };
+            let mut j = 0usize;
+            while j < sl {
+                unsafe {
+                    *rbuf.add(j) = *(*st_ct.add(cur)).add(j);
+                }
+                j += 1;
+            }
+            unsafe {
+                *rbuf.add(sl) = 0;
+            }
+            rln = sl;
+        }
+        self.pre_pool_at = saved_pre;
+        unsafe {
+            (*locals).drop_scope();
+        }
+        *rlen = rln;
+        1
+    }
+
+    /* The chain emitter. Returns 1 when handled (emitted or refused
+     * loudly), 0 when the shape is not a chain this emitter owns (the
+     * historical emitters get their turn). */
+    unsafe fn try_emit_iter_chain(
+        &mut self,
+        e: *const pm_jit_rsx_ast_t,
+        recv: *const pm_jit_rsx_ast_t,
+        mname: *const u8,
+        mlen: usize,
+        margs: *const pm_jit_rsx_ast_t,
+        locals: *mut LocalTab,
+    ) -> usize {
+        if locals.is_null() {
+            return 0;
+        }
+        let line = unsafe { (*e).line };
+        let term = unsafe { chain_terminal(mname, mlen) };
+        if term == CHAIN_T_NONE {
+            return 0;
+        }
+        let mut kinds: [u8; 8] = [0u8; 8];
+        let mut sargs: [*const pm_jit_rsx_ast_t; 8] = [core::ptr::null(); 8];
+        let mut nst = 0usize;
+        let mut over = false;
+        let base = unsafe {
+            chain_decompose(recv, kinds.as_mut_ptr(), sargs.as_mut_ptr(), &mut nst, &mut over)
+        };
+        let mut nfilter = 0usize;
+        let mut nmap = 0usize;
+        {
+            let mut i = 0usize;
+            while i < nst {
+                if kinds[i] == CHAIN_STAGE_FILTER {
+                    nfilter += 1;
+                } else {
+                    nmap += 1;
+                }
+                i += 1;
+            }
+        }
+        if !unsafe { chain_claim(term, nst, nfilter, nmap) } {
+            return 0;
+        }
+        if over {
+            unsafe {
+                self.err(b"unsupported: iterator chain longer than 8 adapters\0".as_ptr(), line);
+            }
+            return 1;
+        }
+        /* terminal argument shapes */
+        let ak = unsafe { (*margs).kids };
+        let an = unsafe { (*margs).n_kids } as usize;
+        let mut init: *const pm_jit_rsx_ast_t = core::ptr::null();
+        let mut tparams: [*const pm_jit_rsx_ast_t; 2] = [core::ptr::null(); 2];
+        let mut tbody: *const pm_jit_rsx_ast_t = core::ptr::null();
+        if term == CHAIN_T_COLLECT || term == CHAIN_T_COUNT || term == CHAIN_T_SUM {
+            if an != 0 {
+                return 0;
+            }
+        } else if term == CHAIN_T_FOLD {
+            if an != 2 {
+                return 0;
+            }
+            init = unsafe { *ak.add(0) };
+            let clo = unsafe { *ak.add(1) };
+            if unsafe { (*clo).kind } != pm_jit_rsx_ast_kind::CLOSURE {
+                return 0;
+            }
+            let tpar = unsafe { closure_params(clo, tparams.as_mut_ptr(), 2, &mut tbody) };
+            if tpar != 2 {
+                unsafe {
+                    self.err(b"unsupported: fold needs |acc, x| and a body\0".as_ptr(), line);
+                }
+                return 1;
+            }
+        } else {
+            if an != 1 {
+                return 0;
+            }
+            let clo = unsafe { *ak.add(0) };
+            if unsafe { (*clo).kind } != pm_jit_rsx_ast_kind::CLOSURE {
+                return 0;
+            }
+            let tpar = unsafe { closure_params(clo, tparams.as_mut_ptr(), 2, &mut tbody) };
+            if tpar != 1 {
+                unsafe {
+                    self.err(
+                        b"unsupported: chain terminal closure needs one bind and a body\0".as_ptr(),
+                        line,
+                    );
+                }
+                return 1;
+            }
+        }
+        /* the fold init types in the OUTER scope — the chain's stage
+         * binds do not exist for it */
+        let ib = self.stable_tmp();
+        let mut ilen = 0usize;
+        if term == CHAIN_T_FOLD {
+            ilen = unsafe { self.expr_ctype(init, ib, 160, locals) };
+            if ilen == 0 {
+                unsafe {
+                    self.err(b"unsupported: fold init type\0".as_ptr(), line);
+                }
+                return 1;
+            }
+        }
+        /* pass 1: the stream type per stage (stable buffers — the map
+         * declarations the loop prints need them before the walk runs in
+         * emission order) */
+        let mut sct: [*mut u8; 9] = [core::ptr::null_mut(); 9];
+        let mut scl: [usize; 9] = [0usize; 9];
+        let rbuf = self.stable_tmp();
+        let mut rlen = 0usize;
+        let walked = unsafe {
+            self.chain_walk_types(
+                base,
+                kinds.as_mut_ptr(),
+                sargs.as_mut_ptr(),
+                nst,
+                term,
+                ib,
+                ilen,
+                tparams.as_mut_ptr(),
+                tbody,
+                locals,
+                sct.as_mut_ptr(),
+                scl.as_mut_ptr(),
+                rbuf,
+                &mut rlen,
+                line,
+            )
+        };
+        if walked == 0 {
+            /* refused — a diagnostic was reported */
+            return 1;
+        }
+        if walked == 2 {
+            /* not a chain base — the historical emitters get their turn */
+            return 0;
+        }
+        /* pass 2: the emission. The base is hoisted once (a row copy —
+         * rows are {p,n,cap} structs and the copy shares the buffer) or
+         * re-emitted per access (arrays; the subset keeps call exprs
+         * side-effect-free). */
+        unsafe {
+            (*locals).note_scope();
+        }
+        let saved_pre = self.pre_pool_at;
+        let bbuf = self.stable_tmp();
+        let blen = unsafe { self.expr_ctype(base, bbuf, 160, locals) };
+        let mut is_row = false;
+        let mut behind = false;
+        let mut elbuf: [u8; 160] = [0u8; 160];
+        let _ = unsafe {
+            self.chain_base_elem(base, locals, elbuf.as_mut_ptr(), 160, &mut is_row, &mut behind)
+        };
+        let sep: *const u8 = if behind { b"->\0".as_ptr() } else { b".\0".as_ptr() };
+        self.out.puts(b"({\n\0".as_ptr());
+        /* terminal state */
+        if term == CHAIN_T_COLLECT {
+            self.out.put(rbuf, rlen);
+            self.out.puts(b" __rsx_o = {0};\n\0".as_ptr());
+        }
+        if term == CHAIN_T_COUNT || term == CHAIN_T_POSITION {
+            self.out.puts(b"size_t __rsx_k = 0;\n\0".as_ptr());
+        }
+        if term == CHAIN_T_POSITION {
+            self.out.puts(b"size_t __rsx_p = (size_t)-1;\n\0".as_ptr());
+        }
+        if term == CHAIN_T_SUM {
+            self.out.put(sct[nst], scl[nst]);
+            self.out.puts(b" __rsx_s = 0;\n\0".as_ptr());
+        }
+        if term == CHAIN_T_FOLD {
+            self.out.put(ib, ilen);
+            self.out.puts(b" __rsx_acc = \0".as_ptr());
+            unsafe { self.emit_expr(init, locals) };
+            self.out.puts(b";\n\0".as_ptr());
+        }
+        if term == CHAIN_T_ALL {
+            self.out.puts(b"bool __rsx_b = true;\n\0".as_ptr());
+        }
+        if term == CHAIN_T_ANY {
+            self.out.puts(b"bool __rsx_b = false;\n\0".as_ptr());
+        }
+        /* the base hoist (rows) */
+        if is_row {
+            self.out.put(bbuf, blen);
+            self.out.puts(b" __rsx_bv = \0".as_ptr());
+            unsafe { self.emit_expr(base, locals) };
+            self.out.puts(b";\n\0".as_ptr());
+        }
+        /* the loop */
+        self.out.puts(b"for (size_t __rsx_i = 0; __rsx_i < \0".as_ptr());
+        if is_row {
+            self.out.puts(b"__rsx_bv\0".as_ptr());
+            self.out.put(sep, 2);
+            self.out.puts(b"n; __rsx_i++) {\n\0".as_ptr());
+        } else {
+            self.out.puts(b"sizeof(\0".as_ptr());
+            unsafe { self.emit_expr(base, locals) };
+            self.out.puts(b") / sizeof((\0".as_ptr());
+            unsafe { self.emit_expr(base, locals) };
+            self.out.puts(b")[0]); __rsx_i++) {\n\0".as_ptr());
+        }
+        self.depth += 1;
+        self.indent();
+        /* the source bind: __rsx_c0 is a copy of the element */
+        self.out.put(sct[0], scl[0]);
+        self.out.puts(b" __rsx_c0 = \0".as_ptr());
+        if is_row {
+            self.out.puts(b"__rsx_bv\0".as_ptr());
+            self.out.put(sep, 2);
+            self.out.puts(b"p[__rsx_i];\n\0".as_ptr());
+        } else {
+            self.out.putc(b'(');
+            unsafe { self.emit_expr(base, locals) };
+            self.out.puts(b")[__rsx_i];\n\0".as_ptr());
+        }
+        /* the stages: __rsx_c0 is the stream at the source, each map
+         * declares the next spelling */
+        let mut svbuf: [u8; 12] = [0u8; 12];
+        let mut svlen = 8usize;
+        svbuf[0] = b'_';
+        svbuf[1] = b'_';
+        svbuf[2] = b'r';
+        svbuf[3] = b's';
+        svbuf[4] = b'x';
+        svbuf[5] = b'_';
+        svbuf[6] = b'c';
+        svbuf[7] = b'0';
+        svbuf[8] = 0;
+        let mut kv = 1usize;
+        let mut cur = 0usize;
+        let mut i = 0usize;
+        while i < nst {
+            self.indent();
+            let mut sp: [*const pm_jit_rsx_ast_t; 1] = [core::ptr::null()];
+            let mut sb: *const pm_jit_rsx_ast_t = core::ptr::null();
+            let _spn = unsafe { closure_params(sargs[i], sp.as_mut_ptr(), 1, &mut sb) };
+            let pname = unsafe { (*sp[0]).text };
+            let plen = unsafe { (*sp[0]).text_len };
+            unsafe {
+                (*locals).add_renamed(
+                    pname,
+                    plen,
+                    svbuf.as_ptr(),
+                    svlen,
+                    sct[cur],
+                    scl[cur],
+                    self.depth + 1,
+                );
+            }
+            let kind = unsafe { kinds[i] };
+            if kind == CHAIN_STAGE_FILTER {
+                self.out.puts(b"if (!(\0".as_ptr());
+                unsafe { self.emit_expr(sb, locals) };
+                self.out.puts(b")) { continue; }\n\0".as_ptr());
+            } else {
+                /* the next stream value: __rsx_c<kv> */
+                let mut nb2: [u8; 12] = [0u8; 12];
+                let mut j2 = 0usize;
+                while j2 < 8 {
+                    nb2[j2] = svbuf[j2];
+                    j2 += 1;
+                }
+                nb2[8] = b'0' + kv as u8;
+                nb2[9] = 0;
+                self.out.put(sct[cur + 1], scl[cur + 1]);
+                self.out.putc(b' ');
+                self.out.put(nb2.as_ptr(), 9);
+                self.out.puts(b" = \0".as_ptr());
+                if kind == CHAIN_STAGE_MAP {
+                    unsafe { self.emit_expr(sb, locals) };
+                } else {
+                    /* the fat view of the current owned String copy */
+                    self.out.puts(b"(rsx_str_ref_t){ (const uint8_t *)(\0".as_ptr());
+                    self.out.put(svbuf.as_ptr(), svlen);
+                    self.out.puts(b").p, (\0".as_ptr());
+                    self.out.put(svbuf.as_ptr(), svlen);
+                    self.out.puts(b").n }\0".as_ptr());
+                }
+                self.out.puts(b";\n\0".as_ptr());
+                let mut j3 = 0usize;
+                while j3 < 10 {
+                    svbuf[j3] = nb2[j3];
+                    j3 += 1;
+                }
+                svlen = 9;
+                kv += 1;
+                cur += 1;
+            }
+            i += 1;
+        }
+        /* the terminal leaf */
+        self.indent();
+        if term == CHAIN_T_COLLECT {
+            self.out.put(rbuf, rlen);
+            self.out.puts(b"_push(&__rsx_o, \0".as_ptr());
+            self.out.put(svbuf.as_ptr(), svlen);
+            self.out.puts(b");\n\0".as_ptr());
+        } else if term == CHAIN_T_COUNT {
+            self.out.puts(b"__rsx_k++;\n\0".as_ptr());
+        } else if term == CHAIN_T_SUM {
+            self.out.puts(b"__rsx_s += \0".as_ptr());
+            self.out.put(svbuf.as_ptr(), svlen);
+            self.out.puts(b";\n\0".as_ptr());
+        } else if term == CHAIN_T_FOLD {
+            let t0 = unsafe { tparams[0] };
+            let t1 = unsafe { tparams[1] };
+            unsafe {
+                (*locals).add_renamed(
+                    (*t0).text,
+                    (*t0).text_len,
+                    b"__rsx_acc\0".as_ptr(),
+                    9,
+                    ib,
+                    ilen,
+                    self.depth + 1,
+                );
+                (*locals).add_renamed(
+                    (*t1).text,
+                    (*t1).text_len,
+                    svbuf.as_ptr(),
+                    svlen,
+                    sct[cur],
+                    scl[cur],
+                    self.depth + 1,
+                );
+            }
+            self.out.puts(b"__rsx_acc = \0".as_ptr());
+            unsafe { self.emit_expr(tbody, locals) };
+            self.out.puts(b";\n\0".as_ptr());
+        } else if term == CHAIN_T_FOREACH {
+            let t0 = unsafe { tparams[0] };
+            unsafe {
+                (*locals).add_renamed(
+                    (*t0).text,
+                    (*t0).text_len,
+                    svbuf.as_ptr(),
+                    svlen,
+                    sct[cur],
+                    scl[cur],
+                    self.depth + 1,
+                );
+            }
+            unsafe { self.emit_expr(tbody, locals) };
+            self.out.puts(b";\n\0".as_ptr());
+        } else if term == CHAIN_T_ALL || term == CHAIN_T_ANY || term == CHAIN_T_POSITION {
+            let t0 = unsafe { tparams[0] };
+            unsafe {
+                (*locals).add_renamed(
+                    (*t0).text,
+                    (*t0).text_len,
+                    svbuf.as_ptr(),
+                    svlen,
+                    sct[cur],
+                    scl[cur],
+                    self.depth + 1,
+                );
+            }
+            self.out.puts(b"if (\0".as_ptr());
+            if term == CHAIN_T_ALL {
+                self.out.putc(b'!');
+            }
+            self.out.putc(b'(');
+            unsafe { self.emit_expr(tbody, locals) };
+            self.out.puts(b")) {\0".as_ptr());
+            if term == CHAIN_T_ALL {
+                self.out.puts(b"__rsx_b = false; break; }\n\0".as_ptr());
+            } else if term == CHAIN_T_ANY {
+                self.out.puts(b"__rsx_b = true; break; }\n\0".as_ptr());
+            } else {
+                self.out.puts(b"__rsx_p = __rsx_k; break; }\n\0".as_ptr());
+                self.indent();
+                self.out.puts(b"__rsx_k++;\n\0".as_ptr());
+            }
+        }
+        self.depth -= 1;
+        self.indent();
+        self.out.puts(b"}\n\0".as_ptr());
+        /* the statement expression's value */
+        if term == CHAIN_T_COLLECT {
+            self.out.puts(b"__rsx_o;\n\0".as_ptr());
+        } else if term == CHAIN_T_COUNT {
+            self.out.puts(b"__rsx_k;\n\0".as_ptr());
+        } else if term == CHAIN_T_SUM {
+            self.out.puts(b"__rsx_s;\n\0".as_ptr());
+        } else if term == CHAIN_T_FOLD {
+            self.out.puts(b"__rsx_acc;\n\0".as_ptr());
+        } else if term == CHAIN_T_FOREACH {
+            self.out.puts(b"(void)0;\n\0".as_ptr());
+        } else if term == CHAIN_T_ALL || term == CHAIN_T_ANY {
+            self.out.puts(b"__rsx_b;\n\0".as_ptr());
+        } else {
+            self.out.puts(b"__rsx_p;\n\0".as_ptr());
+        }
+        self.out.puts(b"})\0".as_ptr());
+        self.pre_pool_at = saved_pre;
+        unsafe {
+            (*locals).drop_scope();
+        }
+        1
+    }
+
     unsafe fn try_emit_closure_loop(
         &mut self,
         recv: *const pm_jit_rsx_ast_t,
@@ -7752,5 +8559,255 @@ impl Lower {
         }
         self.out.puts(b"return;\n\0".as_ptr());
     }
+}
+
+/* ================= iterator adapter chain grammar ================= */
+
+/* The terminals a filter/map adapter chain can end in. collect builds an
+ * out Vec row; count/sum accumulate; fold threads an accumulator;
+ * for_each runs for effect (unit result); all/any/position test the
+ * stream (position's not-found marker is (size_t)-1 — the same one the
+ * bare-position .unwrap_or() select tests). */
+const CHAIN_T_NONE: u8 = 0;
+const CHAIN_T_COLLECT: u8 = 1;
+const CHAIN_T_COUNT: u8 = 2;
+const CHAIN_T_SUM: u8 = 3;
+const CHAIN_T_FOLD: u8 = 4;
+const CHAIN_T_FOREACH: u8 = 5;
+const CHAIN_T_ALL: u8 = 6;
+const CHAIN_T_ANY: u8 = 7;
+const CHAIN_T_POSITION: u8 = 8;
+
+/* One adapter stage of a chain. FILTER keeps the stream and tests it
+ * (the param names the value in place); MAP transforms it (the param
+ * names the previous stream value, the body is the next); MAP_VIEW is
+ * the borrow map String::as_str / Path::new (the next value is a fat
+ * view of the current owned String). */
+const CHAIN_STAGE_FILTER: u8 = 0;
+const CHAIN_STAGE_MAP: u8 = 1;
+const CHAIN_STAGE_MAP_VIEW: u8 = 2;
+
+/* Chain length bound: a chain of more adapters refuses (a precise
+ * refusal beats a wrong lowering). */
+const CHAIN_MAX_STAGES: usize = 8;
+
+/* Which iterator-chain terminal a method name is (CHAIN_T_NONE when it
+ * is not one). */
+unsafe fn chain_terminal(mname: *const u8, mlen: usize) -> u8 {
+    if mlen == 7 && unsafe { z_eq(mname, mlen, b"collect\0".as_ptr()) } {
+        return CHAIN_T_COLLECT;
+    }
+    if mlen == 5 && unsafe { z_eq(mname, mlen, b"count\0".as_ptr()) } {
+        return CHAIN_T_COUNT;
+    }
+    if mlen == 3 && unsafe { z_eq(mname, mlen, b"sum\0".as_ptr()) } {
+        return CHAIN_T_SUM;
+    }
+    if mlen == 4 && unsafe { z_eq(mname, mlen, b"fold\0".as_ptr()) } {
+        return CHAIN_T_FOLD;
+    }
+    if mlen == 8 && unsafe { z_eq(mname, mlen, b"for_each\0".as_ptr()) } {
+        return CHAIN_T_FOREACH;
+    }
+    if mlen == 3 && unsafe { z_eq(mname, mlen, b"all\0".as_ptr()) } {
+        return CHAIN_T_ALL;
+    }
+    if mlen == 3 && unsafe { z_eq(mname, mlen, b"any\0".as_ptr()) } {
+        return CHAIN_T_ANY;
+    }
+    if mlen == 8 && unsafe { z_eq(mname, mlen, b"position\0".as_ptr()) } {
+        return CHAIN_T_POSITION;
+    }
+    CHAIN_T_NONE
+}
+
+/* The shapes the chain emitter owns. A lone `.map(..).collect()` stays on
+ * try_emit_map_collect and a zero-adapter all/any/position stays on
+ * try_emit_closure_loop — the corpus pins those lowerings byte-for-byte
+ * and this gate declines exactly them. count/sum/fold/for_each have no
+ * other emitter at all. */
+unsafe fn chain_claim(term: u8, nst: usize, nfilter: usize, nmap: usize) -> bool {
+    if term == CHAIN_T_COLLECT {
+        return nfilter >= 1 || nmap != 1;
+    }
+    if term == CHAIN_T_COUNT
+        || term == CHAIN_T_SUM
+        || term == CHAIN_T_FOLD
+        || term == CHAIN_T_FOREACH
+    {
+        return true;
+    }
+    if term == CHAIN_T_ALL || term == CHAIN_T_ANY || term == CHAIN_T_POSITION {
+        return nst >= 1;
+    }
+    false
+}
+
+/* The PARAM binds of a closure in source order, body in *body_out. A
+ * `: T` ascription lands as a sibling before its PARAM (the parser keeps
+ * the annotation beside the bind) and `|&x|` keeps the `&` as a kid of
+ * the PARAM (pattern sugar — the bind is the element copy either way, the
+ * same convention as the closure builtins). Returns the param count
+ * (0 and a NULL body when the closure is not this shape). */
+unsafe fn closure_params(
+    clo: *const pm_jit_rsx_ast_t,
+    params: *mut *const pm_jit_rsx_ast_t,
+    cap: usize,
+    body_out: *mut *const pm_jit_rsx_ast_t,
+) -> usize {
+    unsafe {
+        *body_out = core::ptr::null();
+    }
+    let ck = unsafe { (*clo).kids };
+    let cn = unsafe { (*clo).n_kids } as usize;
+    if cn < 2 {
+        return 0;
+    }
+    let body = unsafe { *ck.add(cn - 1) };
+    let mut npar = 0usize;
+    let mut pi = 0usize;
+    while pi + 1 < cn {
+        let k = unsafe { *ck.add(pi) };
+        if unsafe { (*k).kind } == pm_jit_rsx_ast_kind::PARAM {
+            if npar < cap {
+                unsafe {
+                    *params.add(npar) = k;
+                }
+            }
+            npar += 1;
+        }
+        pi += 1;
+    }
+    if npar == 0 || npar > cap {
+        return 0;
+    }
+    unsafe {
+        *body_out = body;
+    }
+    npar
+}
+
+/* Walk `node` inward through METHOD_CALL links, collecting adapter stages
+ * in EXECUTION order — the AST nests a chain right-to-left
+ * (collect(map(filter(iter(v))))), so the walk meets .map first and the
+ * collected run reverses. `.iter()` / `.into_iter()` (no args) mark a
+ * wrapped base and add no stage; any other link ends the walk and is the
+ * base. Writes up to 8 stages to kinds/sargs and the count to *n;
+ * *overflow is set when the chain is longer (the caller refuses). */
+unsafe fn chain_decompose(
+    node: *const pm_jit_rsx_ast_t,
+    kinds: *mut u8,
+    sargs: *mut *const pm_jit_rsx_ast_t,
+    n: *mut usize,
+    overflow: *mut bool,
+) -> *const pm_jit_rsx_ast_t {
+    let mut revk: [u8; 8] = [0u8; 8];
+    let mut reva: [*const pm_jit_rsx_ast_t; 8] = [core::ptr::null(); 8];
+    let mut rn = 0usize;
+    let mut over = false;
+    let mut cur = node;
+    loop {
+        if unsafe { (*cur).kind } != pm_jit_rsx_ast_kind::METHOD_CALL
+            || (unsafe { (*cur).n_kids } as usize) < 3
+        {
+            break;
+        }
+        let k = unsafe { (*cur).kids };
+        let name = unsafe { *k.add(1) };
+        let mname = unsafe { (*name).text };
+        let mlen = unsafe { (*name).text_len };
+        let a = unsafe { *k.add(2) };
+        let an = unsafe { (*a).n_kids } as usize;
+        let is_iter = mlen == 4 && unsafe { z_eq(mname, mlen, b"iter\0".as_ptr()) };
+        let is_into = mlen == 9 && unsafe { z_eq(mname, mlen, b"into_iter\0".as_ptr()) };
+        if is_iter || is_into {
+            if an != 0 {
+                break;
+            }
+            cur = unsafe { *k.add(0) };
+            continue;
+        }
+        let mut kind: u8 = 255;
+        let mut arg: *const pm_jit_rsx_ast_t = core::ptr::null();
+        if an == 1 {
+            let a0 = unsafe { *(*a).kids.add(0) };
+            let ak0 = unsafe { (*a0).kind };
+            if mlen == 6
+                && unsafe { z_eq(mname, mlen, b"filter\0".as_ptr()) }
+                && ak0 == pm_jit_rsx_ast_kind::CLOSURE
+            {
+                kind = CHAIN_STAGE_FILTER;
+                arg = a0;
+            } else if mlen == 3 && unsafe { z_eq(mname, mlen, b"map\0".as_ptr()) } {
+                if ak0 == pm_jit_rsx_ast_kind::CLOSURE {
+                    kind = CHAIN_STAGE_MAP;
+                    arg = a0;
+                } else if ak0 == pm_jit_rsx_ast_kind::PATH {
+                    /* String::as_str / Path::new — the borrow-view map */
+                    let mkp = unsafe { (*a0).kids };
+                    let mkn = unsafe { (*a0).n_kids } as usize;
+                    if mkn >= 2 {
+                        let sl = unsafe { *mkp.add(mkn - 1) };
+                        let sp = unsafe { *mkp.add(mkn - 2) };
+                        if unsafe { (*sl).kind } == pm_jit_rsx_ast_kind::PATH
+                            && unsafe { (*sp).kind } == pm_jit_rsx_ast_kind::PATH
+                            && ((unsafe { z_eq((*sl).text, (*sl).text_len, b"as_str\0".as_ptr()) }
+                                && unsafe { z_eq((*sp).text, (*sp).text_len, b"String\0".as_ptr()) })
+                                || (unsafe { z_eq((*sl).text, (*sl).text_len, b"new\0".as_ptr()) }
+                                    && unsafe { z_eq((*sp).text, (*sp).text_len, b"Path\0".as_ptr()) }))
+                        {
+                            kind = CHAIN_STAGE_MAP_VIEW;
+                            arg = a0;
+                        }
+                    }
+                }
+            }
+        }
+        if kind == 255 {
+            break;
+        }
+        if rn >= CHAIN_MAX_STAGES {
+            over = true;
+            break;
+        }
+        revk[rn] = kind;
+        reva[rn] = arg;
+        rn += 1;
+        cur = unsafe { *k.add(0) };
+    }
+    let mut i = 0usize;
+    while i < rn {
+        unsafe {
+            *kinds.add(i) = revk[rn - 1 - i];
+            *sargs.add(i) = reva[rn - 1 - i];
+        }
+        i += 1;
+    }
+    unsafe {
+        *n = rn;
+        *overflow = over;
+    }
+    cur
+}
+
+/* Arithmetic spellings only: a Sum over structs or Strings is not a
+ * lowering this subset pretends at (a precise refusal beats a wrong one). */
+unsafe fn ctype_is_arith(ct: *const u8, len: usize) -> bool {
+    if unsafe { z_eq(ct, len, b"int8_t\0".as_ptr()) }
+        || unsafe { z_eq(ct, len, b"int16_t\0".as_ptr()) }
+        || unsafe { z_eq(ct, len, b"int32_t\0".as_ptr()) }
+        || unsafe { z_eq(ct, len, b"int64_t\0".as_ptr()) }
+        || unsafe { z_eq(ct, len, b"uint8_t\0".as_ptr()) }
+        || unsafe { z_eq(ct, len, b"uint16_t\0".as_ptr()) }
+        || unsafe { z_eq(ct, len, b"uint32_t\0".as_ptr()) }
+        || unsafe { z_eq(ct, len, b"uint64_t\0".as_ptr()) }
+        || unsafe { z_eq(ct, len, b"size_t\0".as_ptr()) }
+        || unsafe { z_eq(ct, len, b"ptrdiff_t\0".as_ptr()) }
+        || unsafe { z_eq(ct, len, b"float\0".as_ptr()) }
+        || unsafe { z_eq(ct, len, b"double\0".as_ptr()) }
+    {
+        return true;
+    }
+    false
 }
 

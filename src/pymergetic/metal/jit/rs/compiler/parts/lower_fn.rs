@@ -13,7 +13,7 @@ impl Lower {
         /* split: attrs (ATTR), quals (ATTR/TYPE with unsafe/extern text),
          * params (PARAM), ret (TYPE), body (BLOCK). The parser pushes them
          * in order: attrs+vis, quals, params, ret, body. */
-        let mut params: [*const pm_jit_rsx_ast_t; 12] = [core::ptr::null(); 12];
+        let mut params: [*const pm_jit_rsx_ast_t; 24] = [core::ptr::null(); 24];
         let mut n_params = 0usize;
         let mut ret: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
         let mut body: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
@@ -22,9 +22,14 @@ impl Lower {
             let k = unsafe { *kids.add(i) };
             let kk = unsafe { (*k).kind };
             if kk == pm_jit_rsx_ast_kind::PARAM {
-                if n_params < 12 {
+                if n_params < 24 {
                     params[n_params] = k;
                     n_params += 1;
+                } else {
+                    /* past the table the old fill DROPPED the param and
+                     * the emitted proto then disagreed with every call —
+                     * refuse instead of mis-lowering */
+                    self.err(b"unsupported: more than 24 fn params\0".as_ptr(), line);
                 }
             } else if kk == pm_jit_rsx_ast_kind::BLOCK {
                 body = k;

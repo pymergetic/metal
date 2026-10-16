@@ -4508,6 +4508,170 @@ impl Lower {
     /* expr's C type into out; 0 = unknown. Only what the lowering needs:
      * literals, casts, field types via the sym table, calls via the fn
      * table, locals via the let-types seen in this function. */
+    /* The out type of an iterator-adapter chain — the type-only twin of
+     * the chain emitter's first pass. Runs the same decompose/claim gate
+     * (chain_claim declines exactly the shapes try_emit_map_collect /
+     * try_emit_closure_loop own, so the two typings never fight) and the
+     * same chain_walk_types walk, then packs the terminal's result
+     * spelling: collect -> the out Vec row, count/position -> size_t,
+     * sum -> the leaf stream type, fold -> the fold body's type,
+     * all/any -> bool, for_each -> unit (no spelling). Returns 0 when
+     * the chain is not this emitter's shape (the caller falls through to
+     * the historical typings) or refuses (a specific diagnostic already
+     * reported). */
+    unsafe fn chain_ctype(
+        &mut self,
+        e: *const pm_jit_rsx_ast_t,
+        out: *mut u8,
+        cap: usize,
+        locals: *mut LocalTab,
+    ) -> usize {
+        if locals.is_null() || (unsafe { (*e).n_kids } as usize) < 3 {
+            return 0;
+        }
+        let kids = unsafe { (*e).kids };
+        let recv = unsafe { *kids.add(0) };
+        let name = unsafe { *kids.add(1) };
+        let margs = unsafe { *kids.add(2) };
+        let mname = unsafe { (*name).text };
+        let mlen = unsafe { (*name).text_len };
+        let term = unsafe { chain_terminal(mname, mlen) };
+        if term == CHAIN_T_NONE {
+            return 0;
+        }
+        let mut kinds: [u8; 8] = [0u8; 8];
+        let mut sargs: [*const pm_jit_rsx_ast_t; 8] = [core::ptr::null(); 8];
+        let mut nst = 0usize;
+        let mut over = false;
+        let base = unsafe {
+            chain_decompose(recv, kinds.as_mut_ptr(), sargs.as_mut_ptr(), &mut nst, &mut over)
+        };
+        let mut nfilter = 0usize;
+        let mut nmap = 0usize;
+        {
+            let mut i = 0usize;
+            while i < nst {
+                if kinds[i] == CHAIN_STAGE_FILTER {
+                    nfilter += 1;
+                } else {
+                    nmap += 1;
+                }
+                i += 1;
+            }
+        }
+        if !unsafe { chain_claim(term, nst, nfilter, nmap) } {
+            return 0;
+        }
+        if over {
+            unsafe {
+                self.err(
+                    b"unsupported: iterator chain longer than 8 adapters\0".as_ptr(),
+                    (*e).line,
+                );
+            }
+            return 0;
+        }
+        /* terminal argument shapes (the same gates as the emitter) */
+        let ak = unsafe { (*margs).kids };
+        let an = unsafe { (*margs).n_kids } as usize;
+        let mut init: *const pm_jit_rsx_ast_t = core::ptr::null();
+        let mut tparams: [*const pm_jit_rsx_ast_t; 2] = [core::ptr::null(); 2];
+        let mut tbody: *const pm_jit_rsx_ast_t = core::ptr::null();
+        if term == CHAIN_T_COLLECT || term == CHAIN_T_COUNT || term == CHAIN_T_SUM {
+            if an != 0 {
+                return 0;
+            }
+        } else if term == CHAIN_T_FOLD {
+            if an != 2 {
+                return 0;
+            }
+            init = unsafe { *ak.add(0) };
+            let clo = unsafe { *ak.add(1) };
+            if unsafe { (*clo).kind } != pm_jit_rsx_ast_kind::CLOSURE {
+                return 0;
+            }
+            let tpar = unsafe { closure_params(clo, tparams.as_mut_ptr(), 2, &mut tbody) };
+            if tpar != 2 {
+                unsafe {
+                    self.err(
+                        b"unsupported: fold needs |acc, x| and a body\0".as_ptr(),
+                        (*e).line,
+                    );
+                }
+                return 0;
+            }
+        } else {
+            if an != 1 {
+                return 0;
+            }
+            let clo = unsafe { *ak.add(0) };
+            if unsafe { (*clo).kind } != pm_jit_rsx_ast_kind::CLOSURE {
+                return 0;
+            }
+            let tpar = unsafe { closure_params(clo, tparams.as_mut_ptr(), 2, &mut tbody) };
+            if tpar != 1 {
+                unsafe {
+                    self.err(
+                        b"unsupported: chain terminal closure needs one bind and a body\0".as_ptr(),
+                        (*e).line,
+                    );
+                }
+                return 0;
+            }
+        }
+        /* the fold init types in the OUTER scope */
+        let ib = self.stable_tmp();
+        let mut ilen = 0usize;
+        if term == CHAIN_T_FOLD {
+            ilen = unsafe { self.expr_ctype(init, ib, 160, locals) };
+            if ilen == 0 {
+                unsafe {
+                    self.err(b"unsupported: fold init type\0".as_ptr(), (*e).line);
+                }
+                return 0;
+            }
+        }
+        let mut sct: [*mut u8; 9] = [core::ptr::null_mut(); 9];
+        let mut scl: [usize; 9] = [0usize; 9];
+        let rbuf = self.stable_tmp();
+        let mut rlen = 0usize;
+        let walked = unsafe {
+            self.chain_walk_types(
+                base,
+                kinds.as_mut_ptr(),
+                sargs.as_mut_ptr(),
+                nst,
+                term,
+                ib,
+                ilen,
+                tparams.as_mut_ptr(),
+                tbody,
+                locals,
+                sct.as_mut_ptr(),
+                scl.as_mut_ptr(),
+                rbuf,
+                &mut rlen,
+                (*e).line,
+            )
+        };
+        if walked != 1 || rlen == 0 || rlen >= cap {
+            /* not a chain base (2) / refused (0, reported) / the unit
+             * for_each terminal (no C spelling) / an over-long spelling */
+            return 0;
+        }
+        let mut j = 0usize;
+        while j < rlen {
+            unsafe {
+                *out.add(j) = *rbuf.add(j);
+            }
+            j += 1;
+        }
+        unsafe {
+            *out.add(rlen) = 0;
+        }
+        rlen
+    }
+
     unsafe fn expr_ctype(&mut self, e: *const pm_jit_rsx_ast_t, out: *mut u8, cap: usize, locals: *mut LocalTab) -> usize {
         if e.is_null() {
             return 0;
@@ -6858,6 +7022,17 @@ impl Lower {
                  * registered; the body's own type IS the output element.
                  * (The parser skips ::<Vec<_>> turbofish — inference is
                  * from the body, never the annotation.) */
+                /* iterator-adapter chains (filter/map pipelines over a
+                 * Vec/Arr/array base with a collect/count/sum/fold/
+                 * for_each/all/any/position terminal) — the type-only
+                 * twin of the chain emitter; chain_claim declines the
+                 * shapes the map-collect typing below owns. */
+                {
+                    let cn = unsafe { self.chain_ctype(e, out, cap, locals) };
+                    if cn > 0 {
+                        return cn;
+                    }
+                }
                 if mlen == 7 && unsafe { z_eq(mname, mlen, b"collect\0".as_ptr()) } {
                     let recv = unsafe { *kids.add(0) };
                     if unsafe { (*recv).kind } == pm_jit_rsx_ast_kind::METHOD_CALL
@@ -8759,6 +8934,11 @@ impl LocalTab {
         self.name_lens[s] = nlen;
         self.ctypes[s] = sp;
         self.ctype_lens[s] = ctlen;
+        /* a recycled slot (a dropped scope's row) may still carry a
+         * rename-shadow's C spelling — a plain binding emits its own
+         * name, so the stale cname must not survive into this row */
+        self.cnames[s] = core::ptr::null_mut();
+        self.cname_lens[s] = 0;
         self.depths[s] = depth;
         self.epochs[s] = self.epoch;
         self.n += 1;
@@ -8779,6 +8959,51 @@ impl LocalTab {
     ) {
         if self.n >= LOCAL_CAP || nlen >= 48 || clen >= 56 || ct.is_null() || ctlen == 0 {
             return;
+        }
+        /* Reuse guard (the same posture as add): a re-registration of the
+         * identical mapping — same source name, same C spelling, same
+         * type, same scope — reuses the existing row. The chain emitter
+         * re-registers its stage binds on every typing/emission pass and
+         * the arena span of a dropped row is never freed; a row with a
+         * DIFFERENT cname is genuinely new (the rename-shadow must
+         * shadow) and appends below. */
+        let mut s = self.n;
+        while s > 0 {
+            s -= 1;
+            if self.name_lens[s] == nlen
+                && self.cname_lens[s] == clen
+                && self.depths[s] == depth
+                && self.epochs[s] == self.epoch
+                && unsafe { self.span_eq(s, name, nlen) }
+            {
+                let cs = self.cnames[s];
+                let mut eq = true;
+                let mut j = 0usize;
+                while j < clen {
+                    if unsafe { *cs.add(j) != *cname.add(j) } {
+                        eq = false;
+                        break;
+                    }
+                    j += 1;
+                }
+                if eq {
+                    let sp2 = self.ctypes[s];
+                    let cl = self.ctype_lens[s];
+                    if cl == ctlen {
+                        let mut k = 0usize;
+                        while k < ctlen {
+                            if unsafe { *sp2.add(k) != *ct.add(k) } {
+                                eq = false;
+                                break;
+                            }
+                            k += 1;
+                        }
+                        if eq {
+                            return;
+                        }
+                    }
+                }
+            }
         }
         let p = unsafe { pm_util_mem_alloc(self.arena, ctlen + 1) };
         if p.is_null() {

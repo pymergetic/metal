@@ -6829,6 +6829,15 @@ impl Lower {
         {
             return;
         }
+        /* Iterator-adapter chains: any run of filter/map stages over a
+         * Vec/Arr/array base with a collect/count/sum/fold/for_each/
+         * all/any/position terminal. chain_claim declines the shapes
+         * try_emit_map_collect / try_emit_closure_loop below own (their
+         * lowerings are corpus-pinned), and a non-container base falls
+         * through to the user-fn dispatch untouched. */
+        if unsafe { self.try_emit_iter_chain(e, recv, mname, mlen, args, locals) } != 0 {
+            return;
+        }
         /* `.map(|p| body)` on an Option — the single-closure combinator.
          * Receiver shape decides the payload: a struct-Option
          * (rsx_opt_*) reads ._v/._has, a pointer-Option is the value/NULL
