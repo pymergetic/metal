@@ -6126,6 +6126,273 @@ impl Lower {
         1
     }
 
+    /* `.is_ok()` / `.is_err()` / `.unwrap_or(d)` / `.unwrap_or_else(|e| ..)`
+     * / `.map(|v| ..)` / `.map_err(|e| ..)` on a struct-Result
+     * (rsx_res_<T>_<E>) — the Option-combinator posture over both
+     * payloads. The receiver rides one temp (`__rsx_r`) across the
+     * statement expression so a closure bind that shadows the
+     * receiver's own name cannot eat it (the `__rsx_pv` gotcha
+     * try_emit_opt_map dodges); the bind registers in the stmt-expr
+     * scope so the body's PATH lookups resolve. `map`/`map_err` type
+     * the body first and register the out row through res_add — the
+     * typedef flush emits it like a fn return row. Returns 1 when
+     * handled/refused, 0 when the receiver is not a Result row (the
+     * caller falls through to the other method paths: Option map,
+     * position-chain unwrap_or, the generic refusal). */
+    unsafe fn try_emit_res_combinators(
+        &mut self,
+        recv: *const pm_jit_rsx_ast_t,
+        mname: *const u8,
+        mlen: usize,
+        margs: *const pm_jit_rsx_ast_t,
+        locals: *mut LocalTab,
+        line: u32,
+    ) -> usize {
+        let is_ok = unsafe { z_eq(mname, mlen, b"is_ok\0".as_ptr()) };
+        let is_err = unsafe { z_eq(mname, mlen, b"is_err\0".as_ptr()) };
+        let is_uo = unsafe { z_eq(mname, mlen, b"unwrap_or\0".as_ptr()) };
+        let is_uoe = unsafe { z_eq(mname, mlen, b"unwrap_or_else\0".as_ptr()) };
+        let is_map = unsafe { z_eq(mname, mlen, b"map\0".as_ptr()) };
+        let is_me = unsafe { z_eq(mname, mlen, b"map_err\0".as_ptr()) };
+        if !is_ok && !is_err && !is_uo && !is_uoe && !is_map && !is_me {
+            return 0;
+        }
+        let ak = unsafe { (*margs).kids };
+        let an = unsafe { (*margs).n_kids } as usize;
+        if (is_ok || is_err) && an != 0 {
+            return 0;
+        }
+        if (is_uo || is_uoe || is_map || is_me) && an != 1 {
+            return 0;
+        }
+        if is_uoe || is_map || is_me {
+            if unsafe { (**ak.add(0)).kind } != pm_jit_rsx_ast_kind::CLOSURE {
+                return 0;
+            }
+        } else if is_uo {
+            /* unwrap_or takes a value — a closure arg belongs to
+             * unwrap_or_else (or a fn-ptr the subset refuses later) */
+            if unsafe { (**ak.add(0)).kind } == pm_jit_rsx_ast_kind::CLOSURE {
+                return 0;
+            }
+        }
+        /* the receiver's C type must decode as a Result row */
+        let rbuf = self.arena_tmp();
+        let rn = unsafe { self.expr_ctype(recv, rbuf, 128, locals) };
+        if rn < 8 || !unsafe { z_eq(rbuf, 8, b"rsx_res_\0".as_ptr()) } {
+            return 0;
+        }
+        let okb = self.arena_tmp();
+        let erb = self.arena_tmp();
+        let okl = unsafe { Lower::res_typedef_elem(rbuf, rn, okb, 128, erb, 128) };
+        if okl == 0 {
+            return 0;
+        }
+        let mut erl = 0usize;
+        while erl < 128 && unsafe { *erb.add(erl) } != 0 {
+            erl += 1;
+        }
+        /* is_ok / is_err — the tag test, mirroring is_some/is_none */
+        if is_ok || is_err {
+            self.out.putc(b'(');
+            if is_err {
+                self.out.putc(b'!');
+            }
+            unsafe { self.emit_expr(recv, locals) };
+            self.out.puts(b"._ok)\0".as_ptr());
+            return 1;
+        }
+        /* unwrap_or(d) — the T payload either way: one ternary over the
+         * temp, the fallback expression on Err. */
+        if is_uo {
+            self.out.puts(b"({ \0".as_ptr());
+            self.out.put(rbuf, rn);
+            self.out.puts(b" __rsx_r = \0".as_ptr());
+            unsafe { self.emit_expr(recv, locals) };
+            self.out.puts(b"; __rsx_r._ok ? __rsx_r._v : (\0".as_ptr());
+            unsafe { self.emit_expr(*ak.add(0), locals) };
+            self.out.puts(b"); })\0".as_ptr());
+            return 1;
+        }
+        /* the three closure forms: one bind and a body. The bind is the
+         * PARAM kid — a `: T` ascription lands a TYPE kid BESIDE it (the
+         * parser keeps the annotation as a sibling, added first), so the
+         * scan takes the single PARAM among the body's siblings. */
+        let clo = unsafe { *ak.add(0) };
+        let ck = unsafe { (*clo).kids };
+        let cn = unsafe { (*clo).n_kids } as usize;
+        if cn < 2 {
+            unsafe {
+                self.err(
+                    b"unsupported: Result closure needs one bind and a body\0".as_ptr(),
+                    line,
+                );
+            }
+            return 1;
+        }
+        let body = unsafe { *ck.add(cn - 1) };
+        let mut param: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+        let mut npar = 0usize;
+        let mut pi = 0usize;
+        while pi + 1 < cn {
+            let k = unsafe { *ck.add(pi) };
+            if unsafe { (*k).kind } == pm_jit_rsx_ast_kind::PARAM {
+                param = k;
+                npar += 1;
+            }
+            pi += 1;
+        }
+        if npar != 1 || param.is_null() {
+            unsafe {
+                self.err(
+                    b"unsupported: Result closure needs one bind and a body\0".as_ptr(),
+                    line,
+                );
+            }
+            return 1;
+        }
+        let pk = unsafe { (*param).kids };
+        if (unsafe { (*param).n_kids } as usize) >= 1 {
+            let first = unsafe { *pk.add(0) };
+            if unsafe { (*first).kind } == pm_jit_rsx_ast_kind::UNARY {
+                unsafe {
+                    self.err(b"unsupported: Result closure bind is by-value\0".as_ptr(), line);
+                }
+                return 1;
+            }
+        }
+        let bname = unsafe { (*param).text };
+        let blen = unsafe { (*param).text_len };
+        if blen == 0 || bname.is_null() {
+            return 1;
+        }
+        /* the bind's C type: the payload the combinator unpacks */
+        let mut bct = okb;
+        let mut bcl = okl;
+        if is_uoe || is_me {
+            bct = erb;
+            bcl = erl;
+        }
+        /* unwrap_or_else(|e| body) — the T payload either way; the body
+         * runs over the unpacked error. */
+        if is_uoe {
+            unsafe {
+                (*locals).note_scope();
+                (*locals).add(bname, blen, bct, bcl, self.depth);
+            }
+            self.out.puts(b"({ \0".as_ptr());
+            self.out.put(rbuf, rn);
+            self.out.puts(b" __rsx_r = \0".as_ptr());
+            unsafe { self.emit_expr(recv, locals) };
+            self.out.puts(b"; __rsx_r._ok ? __rsx_r._v : ({ \0".as_ptr());
+            self.out.put(bct, bcl);
+            self.out.putc(b' ');
+            self.out.put(bname, blen);
+            self.out.puts(b" = __rsx_r._e; \0".as_ptr());
+            unsafe { self.emit_expr(body, locals) };
+            self.out.puts(b"; }); })\0".as_ptr());
+            unsafe {
+                (*locals).drop_scope();
+            }
+            return 1;
+        }
+        /* map(|v| body) / map_err(|e| body) — type the body over the
+         * bind first (the out row needs its payload spelling), then
+         * build the row and emit. The registration stays live for the
+         * emission below (same stmt-expr scope). */
+        unsafe {
+            (*locals).note_scope();
+            (*locals).add(bname, blen, bct, bcl, self.depth);
+        }
+        let bbuf = self.arena_tmp();
+        let bn = unsafe { self.expr_ctype(body, bbuf, 128, locals) };
+        if bn == 0 {
+            unsafe {
+                (*locals).drop_scope();
+            }
+            return 0;
+        }
+        /* out row: (U, E) for map, (T, F) for map_err */
+        let mut uok = okb;
+        let mut uokl = okl;
+        let mut uer = erb;
+        let mut uerl = erl;
+        if is_map {
+            uok = bbuf;
+            uokl = bn;
+        } else {
+            uer = bbuf;
+            uerl = bn;
+        }
+        let row = unsafe { self.res_add(uok, uokl, uer, uerl) };
+        if row >= RES_CAP {
+            unsafe {
+                (*locals).drop_scope();
+                self.err(b"result type table overflow\0".as_ptr(), line);
+            }
+            return 1;
+        }
+        let tdn = self.arena_tmp();
+        let tdn_len = unsafe { Lower::res_typedef_name(uok, uokl, uer, uerl, tdn, 192) };
+        if tdn_len == 0 {
+            unsafe {
+                (*locals).drop_scope();
+            }
+            return 0;
+        }
+        self.out.puts(b"({ \0".as_ptr());
+        self.out.put(rbuf, rn);
+        self.out.puts(b" __rsx_r = \0".as_ptr());
+        unsafe { self.emit_expr(recv, locals) };
+        self.out.puts(b"; __rsx_r._ok ? (\0".as_ptr());
+        self.out.put(tdn, tdn_len);
+        self.out.puts(b"){ ._v = \0".as_ptr());
+        if is_map {
+            /* the body runs over the unpacked ok payload */
+            self.out.puts(b"({ \0".as_ptr());
+            self.out.put(bct, bcl);
+            self.out.putc(b' ');
+            self.out.put(bname, blen);
+            self.out.puts(b" = __rsx_r._v; \0".as_ptr());
+            unsafe { self.emit_expr(body, locals) };
+            self.out.puts(b"; })\0".as_ptr());
+        } else {
+            self.out.puts(b"__rsx_r._v\0".as_ptr());
+        }
+        self.out.puts(b", ._e = \0".as_ptr());
+        if unsafe { Lower::ctype_is_aggregate(uer, uerl) } {
+            self.out.puts(b"{0}\0".as_ptr());
+        } else {
+            self.out.putc(b'0');
+        }
+        self.out.puts(b", ._ok = 1 } : (\0".as_ptr());
+        self.out.put(tdn, tdn_len);
+        self.out.puts(b"){ ._v = \0".as_ptr());
+        if unsafe { Lower::ctype_is_aggregate(uok, uokl) } {
+            self.out.puts(b"{0}\0".as_ptr());
+        } else {
+            self.out.putc(b'0');
+        }
+        self.out.puts(b", ._e = \0".as_ptr());
+        if is_map {
+            self.out.puts(b"__rsx_r._e\0".as_ptr());
+        } else {
+            /* the body runs over the unpacked error payload */
+            self.out.puts(b"({ \0".as_ptr());
+            self.out.put(bct, bcl);
+            self.out.putc(b' ');
+            self.out.put(bname, blen);
+            self.out.puts(b" = __rsx_r._e; \0".as_ptr());
+            unsafe { self.emit_expr(body, locals) };
+            self.out.puts(b"; })\0".as_ptr());
+        }
+        self.out.puts(b", ._ok = 0 }; })\0".as_ptr());
+        unsafe {
+            (*locals).drop_scope();
+        }
+        1
+    }
+
     /* `X.iter().map(|x| body).collect::<Vec<T>>()` — the map-collect
      * chain over a Vec/&[T]/array base: one stmt-expr building an output
      * row vec, pushing body(elem) per index. The closure's single param

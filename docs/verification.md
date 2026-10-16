@@ -49,13 +49,14 @@ in the compiler breaks the fixed point.
 ## 3. Self-host corpus
 
 ```
-tools/selfhost_corpus/*.rs -> *.c   # 14/14 byte-identical via ./build/selfhost_feed
+tools/selfhost_corpus/*.rs -> *.c   # 15/15 byte-identical via ./build/selfhost_feed
 ```
 
 Each fixture is a Rust slice that must lower to its checked-in `.c` golden
 **byte-for-byte**, on both the boot and the self compiler. The corpus pins the
 accepted subset feature-by-feature (sum types, `match`, iterators, `Result`/`?`,
-traits + dispatch, generics, `let`-destructuring, `macro_rules!`, closure-as-value, …).
+traits + dispatch, generics, `let`-destructuring, `macro_rules!`, closure-as-value,
+Result combinators, …).
 
 ## 4. Seats (every platform)
 
@@ -82,7 +83,9 @@ The ARMV7 seats build with **clang** (`--target=armv7-none-eabihf -nostdlib
 
 Accepted (compiles + runs on every seat above): let/const/static, if/match with
 payloads, guards and struct variants, iterator `for`, sum types and `Result<T,E>`
-with `?`, struct/tuple/tuple-struct `let`-destructuring with `..`/`mut`, nested
+with `?` (including nested `?` across functions), Result combinators
+(`.is_ok()`/`.is_err()`/`.unwrap_or()`/`.unwrap_or_else()`/`.map()`/`.map_err()`),
+struct/tuple/tuple-struct `let`-destructuring with `..`/`mut`, nested
 `fn`, traits + dynamic dispatch, generics (monomorphized), single-arity
 `macro_rules!`, and capture-less closures as values.
 
@@ -128,3 +131,14 @@ With (2) and (3) isolated, clean-build wall clock drops roughly four-fold (the
 builds dominate; each board is serial internally, so per-board `-j` would race
 `genhdr` on a clean tree — the auto-deps `$(BUILD)/*.d` don't exist yet then).
 Tracked as the top build-speed item; the fast path (serial, cached) is unaffected.
+
+**Upstream mpwm merges must not flatten `ports/webassembly/mpconfigport.h`.**
+The metal-python port header carries local defines upstream has no use for —
+notably `MICROPY_PERSISTENT_CODE_SAVE`, which `jit.py`'s object loop needs
+(compile Python source to mpy bytes in-process and load them back). An
+"align with upstream" merge that takes mpwm/main's header verbatim drops the
+define; the build still links, but the first `pymergetic.metal.jit` use in
+`upy_browser_prove.py` exits the wasm guest silently and `make browser` then
+REDs on missing markers with no traceback anywhere. If a merge touches that
+header, `make browser` is the seat that catches it; the define now carries a
+comment at its site so the next merge sees why it exists.

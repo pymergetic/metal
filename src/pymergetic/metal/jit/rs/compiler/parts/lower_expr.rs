@@ -6818,6 +6818,17 @@ impl Lower {
                 return;
             }
         }
+        /* Result combinators (is_ok/is_err/unwrap_or(_else)/map/map_err
+         * over an rsx_res_ row) — try_emit_res_combinators only claims
+         * the call when the receiver's C type decodes as a Result row;
+         * everything else falls through to the paths below (Option map,
+         * position-chain unwrap_or, the generic refusal). */
+        if unsafe {
+            self.try_emit_res_combinators(recv, mname, mlen, args, locals, (*e).line)
+        } != 0
+        {
+            return;
+        }
         /* `.map(|p| body)` on an Option — the single-closure combinator.
          * Receiver shape decides the payload: a struct-Option
          * (rsx_opt_*) reads ._v/._has, a pointer-Option is the value/NULL

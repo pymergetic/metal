@@ -6537,6 +6537,154 @@ impl Lower {
                 let name = unsafe { *kids.add(1) };
                 let mname = unsafe { (*name).text };
                 let mlen = unsafe { (*name).text_len };
+                /* Result combinators (is_ok/is_err/unwrap_or(_else)/map/
+                 * map_err over an rsx_res_ row) — the out type: is_* are
+                 * bool, unwrap_or(_else) yield the T payload, map/map_err
+                 * type the closure body over the bind and register the
+                 * out row ((U, E) / (T, F)) like a fn return row. Only
+                 * claimed when the receiver decodes as a Result row and
+                 * the arg shape matches (value vs closure) — the same
+                 * gates try_emit_res_combinators runs at emission. */
+                let rbuf = self.arena_tmp();
+                let rn = unsafe { self.expr_ctype(*kids.add(0), rbuf, 128, locals) };
+                if rn >= 8 && unsafe { z_eq(rbuf, 8, b"rsx_res_\0".as_ptr()) } {
+                    let rcv_ok = unsafe { z_eq(mname, mlen, b"is_ok\0".as_ptr()) };
+                    let rcv_err = unsafe { z_eq(mname, mlen, b"is_err\0".as_ptr()) };
+                    let rcv_uo = unsafe { z_eq(mname, mlen, b"unwrap_or\0".as_ptr()) };
+                    let rcv_uoe = unsafe { z_eq(mname, mlen, b"unwrap_or_else\0".as_ptr()) };
+                    let rcv_map = unsafe { z_eq(mname, mlen, b"map\0".as_ptr()) };
+                    let rcv_me = unsafe { z_eq(mname, mlen, b"map_err\0".as_ptr()) };
+                    let argt = unsafe { *kids.add(2) };
+                    let argv = unsafe { (*argt).kids };
+                    let argc = unsafe { (*argt).n_kids } as usize;
+                    let mut shape_ok = false;
+                    if (rcv_ok || rcv_err) && argc == 0 {
+                        shape_ok = true;
+                    }
+                    if (rcv_uo || rcv_uoe || rcv_map || rcv_me) && argc == 1 {
+                        let is_cl = unsafe { (**argv.add(0)).kind } == pm_jit_rsx_ast_kind::CLOSURE;
+                        if (rcv_uo && !is_cl) || ((rcv_uoe || rcv_map || rcv_me) && is_cl) {
+                            shape_ok = true;
+                        }
+                    }
+                    if shape_ok {
+                        let okb = self.arena_tmp();
+                        let erb = self.arena_tmp();
+                        let okl = unsafe {
+                            Lower::res_typedef_elem(rbuf, rn, okb, 128, erb, 128)
+                        };
+                        if okl > 0 {
+                            if rcv_ok || rcv_err {
+                                let at = unsafe { bput(out, cap, 0, b"bool\0".as_ptr(), 4) };
+                                unsafe {
+                                    if at < cap {
+                                        *out.add(at) = 0;
+                                    } else if cap > 0 {
+                                        *out.add(cap - 1) = 0;
+                                    }
+                                }
+                                return if at >= cap { 0 } else { at };
+                            }
+                            if rcv_uo || rcv_uoe {
+                                /* the T payload survives either way */
+                                let at = unsafe { bput(out, cap, 0, okb, okl) };
+                                unsafe {
+                                    if at < cap {
+                                        *out.add(at) = 0;
+                                    } else if cap > 0 {
+                                        *out.add(cap - 1) = 0;
+                                    }
+                                }
+                                return if at >= cap { 0 } else { at };
+                            }
+                            /* map / map_err: the body's type over the
+                             * bind decides the swapped payload */
+                            let mut erl = 0usize;
+                            while erl < 128 && unsafe { *erb.add(erl) } != 0 {
+                                erl += 1;
+                            }
+                            let clo = unsafe { *argv.add(0) };
+                            let ckk = unsafe { (*clo).kids };
+                            let ckn = unsafe { (*clo).n_kids } as usize;
+                            if ckn >= 2 {
+                                /* the bind is the PARAM kid — a `: T`
+                                 * ascription lands a TYPE kid beside it */
+                                let mut par: *const pm_jit_rsx_ast_t = core::ptr::null_mut();
+                                let mut npar = 0usize;
+                                let mut pi = 0usize;
+                                while pi + 1 < ckn {
+                                    let pk2 = unsafe { *ckk.add(pi) };
+                                    if unsafe { (*pk2).kind } == pm_jit_rsx_ast_kind::PARAM {
+                                        par = pk2;
+                                        npar += 1;
+                                    }
+                                    pi += 1;
+                                }
+                                if npar == 1 && !par.is_null() {
+                                    let bnm = unsafe { (*par).text };
+                                    let bnl = unsafe { (*par).text_len };
+                                    let bod = unsafe { *ckk.add(ckn - 1) };
+                                    if bnl > 0 && !bnm.is_null() {
+                                        let mut bct = okb;
+                                        let mut bcl = okl;
+                                        if rcv_me {
+                                            bct = erb;
+                                            bcl = erl;
+                                        }
+                                        unsafe {
+                                            (*locals).note_scope();
+                                            (*locals).add(bnm, bnl, bct, bcl, self.depth);
+                                        }
+                                        let bbuf = self.arena_tmp();
+                                        let bn =
+                                            unsafe { self.expr_ctype(bod, bbuf, 128, locals) };
+                                        if bn > 0 {
+                                            let mut uok = okb;
+                                            let mut uokl = okl;
+                                            let mut uer = erb;
+                                            let mut uerl = erl;
+                                            if rcv_map {
+                                                uok = bbuf;
+                                                uokl = bn;
+                                            } else {
+                                                uer = bbuf;
+                                                uerl = bn;
+                                            }
+                                            let row = unsafe { self.res_add(uok, uokl, uer, uerl) };
+                                            if row < RES_CAP {
+                                                let tdn = self.arena_tmp();
+                                                let tdn_len = unsafe {
+                                                    Lower::res_typedef_name(
+                                                        uok, uokl, uer, uerl, tdn, 192,
+                                                    )
+                                                };
+                                                if tdn_len > 0 && tdn_len < cap {
+                                                    let mut w = 0usize;
+                                                    while w < tdn_len {
+                                                        unsafe {
+                                                            *out.add(w) = *tdn.add(w);
+                                                        }
+                                                        w += 1;
+                                                    }
+                                                    unsafe {
+                                                        *out.add(tdn_len) = 0;
+                                                    }
+                                                    unsafe {
+                                                        (*locals).drop_scope();
+                                                    }
+                                                    return tdn_len;
+                                                }
+                                            }
+                                        }
+                                        unsafe {
+                                            (*locals).drop_scope();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 /* trait-object dispatch typing: the receiver's C type
                  * names a declared trait (`&mut dyn T` lowers to `T *`)
                  * — the method call's type is the vtable slot's return,
