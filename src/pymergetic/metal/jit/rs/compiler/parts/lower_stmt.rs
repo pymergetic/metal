@@ -337,9 +337,11 @@ impl Lower {
                      * their own tail. */
                     if k == pm_jit_rsx_ast_kind::IF {
                         unsafe { self.emit_if_value(st2, locals, temp, temp_len) };
-                        unsafe {
-                            (*locals).epoch = saved_epoch;
-                        }
+                        /* the block's own scope still closes here: the
+                         * tail's own scopes died with it. Skipping
+                         * end_block leaks the mark and walls every later
+                         * same-scope shadow search (C redeclaration). */
+                        unsafe { self.end_block(locals, is_unsafe_block2, saved_epoch) };
                         if !is_unsafe_block2 {
                             self.depth -= 1;
                             self.indent();
@@ -349,9 +351,7 @@ impl Lower {
                     }
                     if k == pm_jit_rsx_ast_kind::MATCH {
                         unsafe { self.emit_match_value(st2, locals, temp, temp_len) };
-                        unsafe {
-                            (*locals).epoch = saved_epoch;
-                        }
+                        unsafe { self.end_block(locals, is_unsafe_block2, saved_epoch) };
                         if !is_unsafe_block2 {
                             self.depth -= 1;
                             self.indent();
@@ -361,9 +361,7 @@ impl Lower {
                     }
                     if k == pm_jit_rsx_ast_kind::BLOCK {
                         unsafe { self.emit_block_value(st2, locals, temp, temp_len) };
-                        unsafe {
-                            (*locals).epoch = saved_epoch;
-                        }
+                        unsafe { self.end_block(locals, is_unsafe_block2, saved_epoch) };
                         if !is_unsafe_block2 {
                             self.depth -= 1;
                             self.indent();
@@ -375,9 +373,7 @@ impl Lower {
                         /* a loop as the arm/block tail is control flow, not a
                          * value — it runs and falls out; nothing to assign */
                         unsafe { self.emit_loop(st2, locals) };
-                        unsafe {
-                            (*locals).epoch = saved_epoch;
-                        }
+                        unsafe { self.end_block(locals, is_unsafe_block2, saved_epoch) };
                         if !is_unsafe_block2 {
                             self.depth -= 1;
                             self.indent();
@@ -3886,6 +3882,11 @@ impl Lower {
         let mut i = 1usize;
         let mut first = true;
         while i < nk {
+            /* Every mark an arm's bind notes push must unwind at the
+             * arm's closing brace — capture the wall here and snap back
+             * to it below (a leaked mark walls off later same-scope
+             * shadow searches: C redeclaration on a shadowed let). */
+            let arm_marks = unsafe { (*locals).nmarks };
             let arm = unsafe { *kids.add(i) };
             let ak = unsafe { (*arm).kids };
             let ank = unsafe { (*arm).n_kids } as usize;
@@ -4236,6 +4237,9 @@ impl Lower {
             unsafe { (*locals).note_scope() };
             unsafe { self.emit_block_value(body, locals, temp, temp_len) };
             unsafe { (*locals).drop_scope() };
+            while unsafe { (*locals).nmarks } > arm_marks {
+                unsafe { (*locals).drop_scope() };
+            }
             self.depth -= 1;
             self.indent();
             self.out.puts(b"}\n\0".as_ptr());
