@@ -4,6 +4,45 @@ impl Lower {
     /* Params of a FN node: kids layout is attrs/quals(PARAM TYPE nodes and
      * ATTR nodes), then PARAM nodes, then optional ret TYPE, then body
      * BLOCK. layout_prefix_len tells how many kids are attrs. */
+    /* Flush every pending container-row typedef (tuple/fnp/option/result/
+     * vec/btree/array/mono) until the set stops shrinking — dep-gated so a
+     * `rsx_tuple_*` beats the `rsx_opt_*` whose payload names it. Two sites
+     * share this: the per-body pre-scan flush (rows the signature/prototype
+     * pass must see) and the fn-end flush (rows a body or a SYNTHESIZED
+     * closure def registered late — the pre-scan cannot type closure-body
+     * exprs because the closure's params are not in its locals). */
+    unsafe fn row_flush_fixpoint(&mut self) {
+        let mut rounds = 0usize;
+        loop {
+            let before = self.tup_pending_n()
+                + self.opt_pending_n()
+                + self.res_pending_n()
+                + self.vec_pending_n()
+                + self.btm_pending_n()
+                + self.arr_pending_n()
+                + self.gen_pending_n();
+            unsafe { self.tup_emit_rest() };
+            unsafe { self.fnp_emit_rest() };
+            unsafe { self.opt_emit_rest(0) };
+            unsafe { self.res_emit_rest() };
+            unsafe { self.vec_emit_rest(0) };
+            unsafe { self.btm_emit_rest(0) };
+            unsafe { self.arr_emit_rest(0) };
+            unsafe { self.gen_emit_rest() };
+            let after = self.tup_pending_n()
+                + self.opt_pending_n()
+                + self.res_pending_n()
+                + self.vec_pending_n()
+                + self.btm_pending_n()
+                + self.arr_pending_n()
+                + self.gen_pending_n();
+            if after == before || rounds > 8 {
+                break;
+            }
+            rounds += 1;
+        }
+    }
+
     unsafe fn lower_fn(&mut self, fnitem: *const pm_jit_rsx_ast_t, declare_only: usize) {
         let name = unsafe { (*fnitem).text };
         let nlen = unsafe { (*fnitem).text_len };
@@ -377,10 +416,12 @@ impl Lower {
             unsafe { self.clo_lower_defs() };
             self.out.swap(&mut self.fnbuf);
             self.fnbuf_live = false;
-            /* monomorphized struct rows this body (or a synthesized
-             * closure/mono def) interned flush BEFORE the prototypes —
-             * a prototype or the body text may spell rsx_gp_<n> */
-            unsafe { self.gen_emit_rest() };
+            /* every container-row typedef this body (or a synthesized
+             * closure def — closure params are invisible to the pre-scan,
+             * so closure-body lets register rows HERE) interned flushes
+             * BEFORE the prototypes — a prototype or the body text may
+             * spell rsx_tuple_* / rsx_opt_* / rsx_gp_<n> */
+            unsafe { self.row_flush_fixpoint() };
             self.out.put(self.clo_proto.p, self.clo_proto.len);
             self.out.put(self.clo_defs.p, self.clo_defs.len);
             self.out.put(self.fnbuf.p, self.fnbuf.len);
@@ -1036,6 +1077,22 @@ impl Lower {
      * own free faces spell it (rsx lowers no drops). `from` scopes the
      * walk: the struct pass's two-phase flush passes its snapshot so
      * rows earlier passes interned stay pending (see res_emit_rest_from). */
+    /* <stdlib.h> once per unit — the container planes' ops call
+     * realloc/free/abort and need the ISO prototypes (else realloc's
+     * implicit-int return truncates the pointer). The emitters run from
+     * several flush points (pre-scan, fn-end, file fixpoint) and the
+     * include must not stack duplicates; whichever plane emits FIRST
+     * prints it, and Out is append-only so it always precedes every
+     * helper definition in the stream. Container-free units keep their
+     * byte-identical output (no emitter runs, no include). */
+    unsafe fn stdlib_hdr(&mut self) {
+        if self.stdlib_hdr_done {
+            return;
+        }
+        self.stdlib_hdr_done = true;
+        self.out.puts(b"#include <stdlib.h>\n\0".as_ptr());
+    }
+
     unsafe fn vec_emit_rest(&mut self, from: usize) {
         if self.vecs.n == 0 || self.vecs.n <= from {
             return;
@@ -1045,7 +1102,7 @@ impl Lower {
          * low 32 bits) and the first store faults. <stdlib.h> is pulled
          * in only with the container plane — container-free units keep
          * their byte-identical output. */
-        self.out.puts(b"#include <stdlib.h>\n\0".as_ptr());
+        unsafe { self.stdlib_hdr() };
         let mut s = from;
         while s < self.vecs.n {
             if !self.vecs.done[s] {
@@ -1147,7 +1204,7 @@ impl Lower {
         if self.btms.n == 0 || self.btms.n <= from {
             return;
         }
-        self.out.puts(b"#include <stdlib.h>\n\0".as_ptr());
+        unsafe { self.stdlib_hdr() };
         let mut s = from;
         while s < self.btms.n {
             let kb = self.btms.keys[s].as_ptr();
@@ -1812,7 +1869,7 @@ impl Lower {
         if !self.str_own_used {
             return;
         }
-        self.out.puts(b"#include <stdlib.h>\n\0".as_ptr());
+        unsafe { self.stdlib_hdr() };
         self.out.puts(
             b"typedef struct { char *p; size_t n; size_t cap; } rsx_str_t;\n\0".as_ptr(),
         );
@@ -2586,7 +2643,7 @@ impl Lower {
             self.out.puts(b"#include <unistd.h>\n\0".as_ptr());
         }
         if self.env_used || self.assert_used {
-            self.out.puts(b"#include <stdlib.h>\n\0".as_ptr());
+            unsafe { self.stdlib_hdr() };
         }
         /* the path-metadata plane's include: stat/S_ISDIR/S_ISREG need
          * <sys/stat.h> — armed by typing or emission, flushed once
@@ -2831,35 +2888,7 @@ impl Lower {
          * (progress) or nothing pending remains whose deps are all
          * complete. */
         {
-            let mut rounds = 0usize;
-            loop {
-                let before = self.tup_pending_n()
-                    + self.opt_pending_n()
-                    + self.res_pending_n()
-                    + self.vec_pending_n()
-                    + self.btm_pending_n()
-                    + self.arr_pending_n()
-                    + self.gen_pending_n();
-                unsafe { self.tup_emit_rest() };
-                unsafe { self.fnp_emit_rest() };
-                unsafe { self.opt_emit_rest(0) };
-                unsafe { self.res_emit_rest() };
-                unsafe { self.vec_emit_rest(0) };
-                unsafe { self.btm_emit_rest(0) };
-                unsafe { self.arr_emit_rest(0) };
-                unsafe { self.gen_emit_rest() };
-                let after = self.tup_pending_n()
-                    + self.opt_pending_n()
-                    + self.res_pending_n()
-                    + self.vec_pending_n()
-                    + self.btm_pending_n()
-                    + self.arr_pending_n()
-                    + self.gen_pending_n();
-                if after == before || rounds > 8 {
-                    break;
-                }
-                rounds += 1;
-            }
+            unsafe { self.row_flush_fixpoint() };
         }
         /* Lock rows — same file-scope contract (a fn signature naming
          * Mutex<T> needs the typedef complete before the prototype) */

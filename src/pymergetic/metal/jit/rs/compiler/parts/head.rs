@@ -19,12 +19,14 @@
 // type lowers to tag + payload structs and `match` decomposes it),
 // `impl Type` / `impl Trait for Type`, `extern "C" { fn .. }` blocks,
 // `static`/`const` (literal initializers), `type` aliases, `fn` with
-// `const`/`unsafe`/`extern "C"` qualifiers, generic `fn f<T>(..)`
-// (monomorphized per concrete call site), `mod name;` / `mod name { .. }`
+// `const`/`unsafe`/`extern "C"` qualifiers, `mod name;` / `mod name { .. }`
 // items (module structure is compile-time — both forms lower to a
 // comment, the inline body is not lowered), nested `fn` items inside fn
 // bodies, and `macro_rules!` definitions (below). Refused: generics on
-// `impl`/`extern`/`static`/`const`/`type`, non-type generic params
+// `impl`/`extern`/`static`/`const`/`type`, type parameters on `fn`
+// (`fn f<T>(..)` refuses as `generics on fn` — monomorphization covers
+// generic STRUCTS and their turbofish/inferred literals, not fns; only
+// lifetime parameter lists are skipped), non-type generic params
 // (`const N: usize`, lifetimes), `async`/`const` blocks.
 //
 // Statements: `let` (ident / `mut ident` / `_`, optional type + init),
@@ -62,7 +64,10 @@
 // a token tree; `name!(..)` in expression position expands at parse
 // time. Refused: recursion (expansion depth > 4), other metavariable
 // kinds (`ty`, `tt`, `stmt`, `pat`), multiple matcher arms, `$(..)`
-// repetition, and path-qualified `a::m!(..)` invocations (they stay
+// repetition, a body with statements (`let $i = …;`) used in expression
+// position — statement/item keywords cannot begin an expression, parse
+// refuses `expected expression, found statement/item keyword` at the
+// expansion site — and path-qualified `a::m!(..)` invocations (they stay
 // opaque and the lowering refuses them). Built-in macros with their own
 // lowering: `vec!`, `format!`, `print!`/`println!`/`eprint!`/
 // `eprintln!`, `write!`/`writeln!`, the `assert!` family, the `case(..)`

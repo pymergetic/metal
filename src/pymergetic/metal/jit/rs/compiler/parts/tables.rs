@@ -162,12 +162,17 @@ impl SymTab {
         SYM_CAP
     }
 
-    unsafe fn add(&mut self, name: *const u8, len: usize) -> usize {
+    /* Register (or find) a struct/row by name. The name bytes are COPIED
+     * into the arena (span) — callers pass AST source text, a rendered
+     * row name, or a pre_pool temp, and a pool slice is recycled by the
+     * next probe's `pre_pool_at` reset: storing the pointer would leave
+     * the entry reading overwritten memory by the next lookup. */
+    unsafe fn add(&mut self, arena: *mut pm_util_mem_arena_t, name: *const u8, len: usize) -> usize {
         let s = unsafe { self.slot(name, len) };
         if s >= SYM_CAP {
             return s;
         }
-        self.names[s] = name;
+        self.names[s] = unsafe { self.span(arena, name, len) };
         self.name_lens[s] = len;
         self.used[s] = true;
         self.field_counts[s] = 0;

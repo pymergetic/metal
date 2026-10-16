@@ -687,9 +687,19 @@ impl Lower {
         {
             init = unsafe { *(*init).kids.add(0) };
         }
-        let ct = self.arena_tmp();
-        let mut ct_len = unsafe { self.expr_ctype(init, ct, 128, locals) };
-        if ct_len == 0 || ct_len >= 128 {
+        /* the tuple typedef name runs as long as its element rows spell
+         * (long res/opt rows push it past 160) — take an exact-capable
+         * scratch so the name round-trips WHOLE; the signature lookup
+         * below matches full names only */
+        let ct = self.name_tmp(1024);
+        if ct.is_null() {
+            unsafe {
+                self.err(b"cannot infer tuple let-else type\0".as_ptr(), line);
+            }
+            return;
+        }
+        let mut ct_len = unsafe { self.expr_ctype(init, ct, 1024, locals) };
+        if ct_len == 0 || ct_len >= 1024 {
             unsafe {
                 self.err(b"cannot infer tuple let-else type\0".as_ptr(), line);
             }
@@ -930,16 +940,26 @@ impl Lower {
         {
             init = unsafe { *(*init).kids.add(0) };
         }
-        /* the tuple C type: ascription first, else inferred from init */
-        let ct = self.arena_tmp();
+        /* the tuple C type: ascription first, else inferred from init.
+         * The typedef name runs as long as its element rows spell (long
+         * res/opt rows push it past 160) — take an exact-capable scratch
+         * so the name round-trips WHOLE; the signature lookup below
+         * matches full names only */
+        let ct = self.name_tmp(1024);
+        if ct.is_null() {
+            unsafe {
+                self.err(b"cannot infer tuple let type - ascribe it\0".as_ptr(), line);
+            }
+            return;
+        }
         let mut ct_len = 0usize;
         if !ty.is_null() {
-            ct_len = unsafe { self.ctype(ty, ct, 128) };
+            ct_len = unsafe { self.ctype(ty, ct, 1024) };
         }
         if ct_len == 0 {
-            ct_len = unsafe { self.expr_ctype(init, ct, 128, locals) };
+            ct_len = unsafe { self.expr_ctype(init, ct, 1024, locals) };
         }
-        if ct_len == 0 || ct_len >= 128 {
+        if ct_len == 0 || ct_len >= 1024 {
             unsafe {
                 self.err(b"cannot infer tuple let type - ascribe it\0".as_ptr(), line);
             }

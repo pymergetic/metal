@@ -38,7 +38,6 @@ struct Sink {
 };
 typedef struct Sink Sink;
 
-#include <stdlib.h>
 
 #line 12 "__impl__.rs"
 void drain(rsx_vec_0 * dst, rsx_arr_0 src, uint8_t pad)
@@ -46,6 +45,7 @@ void drain(rsx_vec_0 * dst, rsx_arr_0 src, uint8_t pad)
 #line 20 "__impl__.rs"
 uint32_t count_bytes(void)
 ;
+
 #line 12 "__impl__.rs"
 void drain(rsx_vec_0 * dst, rsx_arr_0 src, uint8_t pad)
 {
@@ -57,6 +57,7 @@ void drain(rsx_vec_0 * dst, rsx_arr_0 src, uint8_t pad)
         { size_t _k; size_t _n = sizeof((*(&hdr))) / sizeof((*(&hdr))[0]); for (_k = 0; _k < _n; _k++) { rsx_vec_0_push(dst, (*(&hdr))[_k]); } };
     }
 }
+
 
 #line 20 "__impl__.rs"
 uint32_t count_bytes(void)

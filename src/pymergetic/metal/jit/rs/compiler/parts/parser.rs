@@ -2448,6 +2448,28 @@ impl Parser {
         n
     }
 
+    /* Statement/item keywords can never BEGIN an expression — a
+     * macro_rules! body with statements (let $i = …;) substituted into
+     * expression position used to parse as pseudo-C garbage and die at
+     * the cc stage. `if`/`match`/`loop`/`while`/`for`/`return`/`break`/
+     * `continue` stay legal (they ARE expressions in Rust). */
+    unsafe fn kw_begins_stmt(&mut self, at: u32) -> bool {
+        unsafe {
+            self.is_kw(at, b"let\0".as_ptr())
+                || self.is_kw(at, b"fn\0".as_ptr())
+                || self.is_kw(at, b"struct\0".as_ptr())
+                || self.is_kw(at, b"enum\0".as_ptr())
+                || self.is_kw(at, b"trait\0".as_ptr())
+                || self.is_kw(at, b"impl\0".as_ptr())
+                || self.is_kw(at, b"use\0".as_ptr())
+                || self.is_kw(at, b"mod\0".as_ptr())
+                || self.is_kw(at, b"type\0".as_ptr())
+                || self.is_kw(at, b"static\0".as_ptr())
+                || self.is_kw(at, b"extern\0".as_ptr())
+                || self.is_kw(at, b"macro_rules\0".as_ptr())
+        }
+    }
+
     unsafe fn parse_primary_expr(&mut self) -> *mut pm_jit_rsx_ast_t {
         let line = unsafe { self.line(self.at) };
         let k = unsafe { self.kind(self.at) };
@@ -2644,6 +2666,12 @@ impl Parser {
             return unsafe { self.parse_labeled_or_plain_loop(lname, llen) };
         }
         if k == pm_jit_rsx_tok_kind::IDENT {
+            if unsafe { self.kw_begins_stmt(self.at) } {
+                unsafe {
+                    self.err(b"expected expression, found statement/item keyword\0".as_ptr());
+                }
+                return core::ptr::null_mut();
+            }
             if unsafe { self.is_kw(self.at, b"if\0".as_ptr()) } {
                 return unsafe { self.parse_if_expr() };
             }

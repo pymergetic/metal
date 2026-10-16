@@ -149,6 +149,11 @@ struct Lower {
      * typedef and the C name would not exist at the use site). */
     strpair_used: bool,
     strpair_done: bool,
+    /* <stdlib.h> for the container planes' realloc/free/abort ops: one
+     * include per unit no matter how many flush rounds emit rows (the
+     * emitters run per pre-scan, per fn-end, and at the file fixpoint —
+     * a per-call include would stack duplicates in the output). */
+    stdlib_hdr_done: bool,
     /* Struct-shaped Option payload spellings seen this unit (each renders
      * as the named typedef rsx_opt_<elem>, emitted once in the preamble —
      * an inline `struct { T _v; bool _has; }` at each use site would be a
@@ -2128,7 +2133,11 @@ impl Lower {
                 let mut f = 0usize;
                 while f < nk {
                     let e = unsafe { *kids.add(f) };
-                    let n = unsafe { self.ctype(e, el_bufs[f].as_mut_ptr(), 64) };
+                    let mut n = unsafe { self.ctype(e, el_bufs[f].as_mut_ptr(), 64) };
+                    if n == 0 || n >= 64 {
+                        return 0;
+                    }
+                    n = unsafe { self.fnp_normalize(el_bufs[f].as_mut_ptr(), n, 64) };
                     if n == 0 || n >= 64 {
                         return 0;
                     }
@@ -2163,15 +2172,17 @@ impl Lower {
                     }
                     return 0;
                 }
+                /* whole-name copy: bput truncates silently, and a
+                 * truncated tuple name is not any registered signature —
+                 * refuse so the caller's own error fires instead. */
+                if at + tdn_len >= cap {
+                    return 0;
+                }
                 at = unsafe { bput(out, cap, at, tdn, tdn_len) };
                 unsafe {
-                    if at < cap {
-                        *out.add(at) = 0;
-                    } else if cap > 0 {
-                        *out.add(cap - 1) = 0;
-                    }
+                    *out.add(at) = 0;
                 }
-                return if at >= cap { 0 } else { at };
+                return at;
             }
             /* wrapper forms */
             if unsafe { z_eq(text, text_len, b"*\0".as_ptr()) } {
@@ -2626,6 +2637,32 @@ impl Lower {
         }
         self.ok = false;
         self.oom_buf.as_mut_ptr()
+    }
+
+    /* A raw fn-pointer spelling (`RET (*)(params)`) is not a legal C
+     * struct-member declarator — the Option/Result/tuple rows must carry
+     * the interned `rsx_fnp_<row>` typedef name instead (the same
+     * spelling the Option payload path produces). Normalizes in place;
+     * spellings without the `(*` marker pass through unchanged. Returns
+     * the (possibly shorter) length; 0 on fn-pointer table overflow. */
+    unsafe fn fnp_normalize(&mut self, buf: *mut u8, len: usize, cap: usize) -> usize {
+        let mut hit = false;
+        let mut i = 0usize;
+        while i + 1 < len {
+            if unsafe { *buf.add(i) } == b'(' && unsafe { *buf.add(i + 1) } == b'*' {
+                hit = true;
+                break;
+            }
+            i += 1;
+        }
+        if !hit {
+            return len;
+        }
+        let row = unsafe { self.fnps.intern(buf, len) };
+        if row >= FNP_CAP {
+            return 0;
+        }
+        unsafe { FnPtrTab::name_for(row, buf, cap) }
     }
 
     /* Exact-size scratch for one encoded typedef name. The 160-byte
@@ -3678,7 +3715,7 @@ impl Lower {
             self.gen_row_done[row] = true;
             /* the instantiated layout: one SymTab row under the row name
              * (field access and literals read it like any struct) */
-            let s = unsafe { (*self.syms).add(tdn, tn) };
+            let s = unsafe { (*self.syms).add(self.arena, tdn, tn) };
             if s >= SYM_CAP {
                 unsafe {
                     self.err(b"internal: generic row sym overflow\0".as_ptr(), line);
@@ -3817,7 +3854,7 @@ impl Lower {
                     i += 1;
                     continue;
                 }
-                let s = unsafe { (*self.syms).add((*item).text, (*item).text_len) };
+                let s = unsafe { (*self.syms).add(self.arena, (*item).text, (*item).text_len) };
                 let mut j = 0usize;
                 while j < unsafe { (*item).n_kids } as usize {
                     let f = unsafe { *(*item).kids.add(j) };
@@ -3842,7 +3879,7 @@ impl Lower {
                  * resolve their type; variants go into the enum table so
                  * the all-zero static-initializer elision can prove which
                  * variants are zero (same numbering lower_enum assigns). */
-                let _ = unsafe { (*self.syms).add((*item).text, (*item).text_len) };
+                let _ = unsafe { (*self.syms).add(self.arena, (*item).text, (*item).text_len) };
                 let ename = unsafe { (*item).text };
                 let elen = unsafe { (*item).text_len };
                 let ekids = unsafe { (*item).kids };
@@ -4838,7 +4875,11 @@ impl Lower {
             let mut f = 0usize;
             while f < nk {
                 let kv = unsafe { *kids.add(f) };
-                let n = unsafe { self.expr_ctype(kv, el_bufs[f].as_mut_ptr(), 64, locals) };
+                let mut n = unsafe { self.expr_ctype(kv, el_bufs[f].as_mut_ptr(), 64, locals) };
+                if n == 0 || n >= 64 {
+                    return 0;
+                }
+                n = unsafe { self.fnp_normalize(el_bufs[f].as_mut_ptr(), n, 64) };
                 if n == 0 || n >= 64 {
                     return 0;
                 }
@@ -4864,15 +4905,19 @@ impl Lower {
             if tdn_len == 0 {
                 return 0;
             }
+            /* The copy must carry the name WHOLE. bput truncates, and a
+             * truncated tuple name is not any registered signature — the
+             * round-trip through tup_find would miss ("internal: tuple
+             * ... signature not registered") or, worse, name a wrong
+             * row. Refuse so the caller's own inference error fires. */
+            if tdn_len >= cap {
+                return 0;
+            }
             let at = unsafe { bput(out, cap, 0, tdn, tdn_len) };
             unsafe {
-                if at < cap {
-                    *out.add(at) = 0;
-                } else if cap > 0 {
-                    *out.add(cap - 1) = 0;
-                }
+                *out.add(at) = 0;
             }
-            return if at >= cap { 0 } else { at };
+            return at;
         }
         if kind == pm_jit_rsx_ast_kind::BLOCK {
             /* value-position block (incl. `unsafe { .. }` wrappers): type of
@@ -5613,7 +5658,14 @@ impl Lower {
                                 if unsafe { (*args_s).n_kids } as usize == 1 {
                                     let inner_s = unsafe { *(*args_s).kids.add(0) };
                                     let ib = self.arena_tmp();
-                                    let il = unsafe { self.expr_ctype(inner_s, ib, 128, locals) };
+                                    let mut il = unsafe { self.expr_ctype(inner_s, ib, 128, locals) };
+                                    if il > 0 && il < 96 {
+                                        /* a fn-ptr payload must ride the
+                                         * rsx_fnp_<row> spelling — the raw
+                                         * `RET (*)(..)` form is not a legal
+                                         * struct-member declarator */
+                                        il = unsafe { self.fnp_normalize(ib, il, 128) };
+                                    }
                                     if il > 0 && il < 96 {
                                         let slot = unsafe { self.opt_add(ib, il) };
                                         if slot < OPT_CAP {

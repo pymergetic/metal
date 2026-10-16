@@ -5369,7 +5369,7 @@ impl Lower {
                             let ab = self.arena_tmp();
                             let a0 = unsafe { *ak.add(0) };
                             /* unwrap a `&`/`&mut` borrow on the arg */
-                            let mut inner = a0;
+                            let mut inner: *const pm_jit_rsx_ast_t = a0;
                             let mut hops = 0;
                             while hops < 2
                                 && unsafe { (*inner).kind } == pm_jit_rsx_ast_kind::UNARY
