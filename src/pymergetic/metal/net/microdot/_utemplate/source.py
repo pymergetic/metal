@@ -1,4 +1,6 @@
 # (c) 2014-2019 Paul Sokolovsky. MIT license.
+import os
+
 from . import compiled
 
 
@@ -188,9 +190,21 @@ class Loader(compiled.Loader):
         compiled_path = self.pkg_path + self.compiled_path(name)
 
         f_in = self.input_open(name)
-        f_out = open(compiled_path, "w")
+        # Write to a temp path, then rename into place: a seat that renders a
+        # template concurrently (e.g. two firmware boards sharing this
+        # generated module during a clean parallel build) must never import a
+        # half-written file. os.replace (CPy) / os.rename (uPy, same-dir so it
+        # is atomic on the underlying fs) both swap in one step. The tmp name
+        # is process-unique so two concurrent compilers never truncate the
+        # same scratch file (os.getpid is CPy-only; uPy renders are not
+        # cross-process, so id() is a safe fallback there).
+        _pid = getattr(os, "getpid", lambda: id(self))()
+        tmp_path = "%s.%s.tmp" % (compiled_path, _pid)
+        f_out = open(tmp_path, "w")
         c = Compiler(f_in, f_out, loader=self)
         c.compile()
         f_in.close()
         f_out.close()
+        _swap = getattr(os, "replace", None) or os.rename
+        _swap(tmp_path, compiled_path)
         return super().load(name)

@@ -406,11 +406,12 @@ class Engine:
         self.comp = compiled_dir
         self._cache = {}
 
-    def compile(self, name):
-        """Emit the compiled template module without rendering it.
+    def _compile_to(self, name, src_path):
+        """Compile template `name` (source at src_path) into its module file.
 
-        The seat renders from these modules (FrozenEngine), so a template it
-        never renders at build time still has to be compiled for it.
+        Writes to a process-unique temp path, then renames into place, so two
+        seats compiling the same shared template during a clean parallel build
+        never import a half-written module. Returns the compiled path.
         """
         import os
         vts = _vts()
@@ -419,24 +420,28 @@ class Engine:
         comp = self.comp or (self.tpl + "/_compiled")
         os.makedirs(comp, exist_ok=True)
         cpath = os.path.join(comp, name.replace(".", "_") + ".py")
-        with open(os.path.join(self.tpl, name)) as fi, open(cpath, "w") as fo:
+        tmp = "%s.%s.tmp" % (cpath, os.getpid())
+        with open(src_path) as fi, open(tmp, "w") as fo:
             vts.Compiler(fi, fo, loader=None).compile()
+        _swap = getattr(os, "replace", None) or os.rename
+        _swap(tmp, cpath)
         return cpath
+
+    def compile(self, name):
+        """Emit the compiled template module without rendering it.
+
+        The seat renders from these modules (FrozenEngine), so a template it
+        never renders at build time still has to be compiled for it.
+        """
+        import os
+        return self._compile_to(name, os.path.join(self.tpl, name))
 
     def render(self, name, ctx):
         import os
         src = os.path.join(self.tpl, name)
-        vts = _vts()
-        if vts is None:
-            raise RuntimeError("utemplate not available: %s" % (_vterr() or "import failed"))
         mod = self._cache.get(name)
         if mod is None:
-            comp = self.comp or (self.tpl + "/_compiled")
-            os.makedirs(comp, exist_ok=True)
-            cpath = os.path.join(comp, name.replace(".", "_") + ".py")
-            with open(src) as fi, open(cpath, "w") as fo:
-                c = vts.Compiler(fi, fo, loader=None)
-                c.compile()
+            cpath = self._compile_to(name, src)
             import importlib.util
             spec = importlib.util.spec_from_file_location("_ut_%s" % name.replace(".", "_"), cpath)
             if spec is None:

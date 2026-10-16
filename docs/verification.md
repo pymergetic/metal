@@ -92,3 +92,39 @@ with no env slot; captures only work where the closure body is inlined — the
 `.map`/`.all`/`.any`/`.position`/`.unwrap_or_else` combinators), `dyn Trait` trait
 objects as first-class values, async blocks, and `macro_rules!` beyond one fixed
 arity. Each refusal names the construct so the boundary is discoverable.
+
+## Optimization notes
+
+**Template compile is atomic now.** `utemplate` compiles each `.html` template
+into a generated module under `inspect/www/_compiled/` (`_ut_reg_html.py`,
+`_ut_home_html.py`, …). Both compile paths wrote that shared file non-atomically
+(`open(cpath, "w")` in `catalog_render.py` `compile`/`render` and in
+`net/microdot/_utemplate/source.py` `load`), so two seats compiling the same
+template at once could import a half-written module (`no attribute 'render'`).
+Each now writes to a process-unique temp file and renames into place
+(`os.replace` on CPython, `os.rename` on µPy, same dir). Same content, no torn
+reads — a correctness fix that also unblocks concurrent template work.
+
+**Board builds/proofs are serial but could be parallel — three shared-state
+races block it.** `make firmware`/`firmware-prove` build four boards one after
+another. Each board compiles into its own `$(BUILD)=build/$(BOARD)-$(ENGINE)`
+dir (objects, `genhdr`, `cdn.log` all per-board), so the compiles are
+independent — but turning the four on concurrently exposes three shared
+artifacts that must be isolated first:
+
+1. **Compiled templates** (`www/_compiled/`) — *fixed* above (atomic write).
+2. **`rustc` crate** — all four boards build `libfw_lock.a` with
+   `--crate-name fw_lock` concurrently; rustc's shared crate/incremental state
+   collides across the four same-named crates with different `--target`s and
+   yields `ld: … libfw_lock.a: file in wrong format`. Fix: a per-board crate
+   name (and matching link).
+3. **Live CDN port** — every `prove` starts a CDN on the shared `CDN_PORT`
+   (18124) that the firmware guest hardcodes (`port/upy/firmware_upy_cdn.py`),
+   and `port/live_cdn.sh` drops a leftover listener on that port; two proves
+   kill each other's server. Fix: a per-board port baked into each guest
+   (or keep proves serial and parallelize only the builds).
+
+With (2) and (3) isolated, clean-build wall clock drops roughly four-fold (the
+builds dominate; each board is serial internally, so per-board `-j` would race
+`genhdr` on a clean tree — the auto-deps `$(BUILD)/*.d` don't exist yet then).
+Tracked as the top build-speed item; the fast path (serial, cached) is unaffected.
