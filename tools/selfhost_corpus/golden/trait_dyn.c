@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <string.h>
 
-#line 9 "__impl__.rs"
+#line 16 "__impl__.rs"
 typedef struct Counter Counter;
 struct Counter {
     uint8_t v;
@@ -12,57 +12,88 @@ struct Counter {
 typedef struct Counter Counter;
 
 typedef struct {
-    void *_self;
     uint8_t (*add)(void *_self, uint8_t x);
     uint8_t (*get)(void *_self);
-} Adder;
-#line 19 "__impl__.rs"
+} Adder_vt;
+typedef struct {
+    const void *_self;
+    const Adder_vt *vt;
+} Adder_ref;
+#line 26 "__impl__.rs"
 uint8_t Counter_Adder_add(Counter * self, uint8_t x)
 ;
-#line 23 "__impl__.rs"
+#line 30 "__impl__.rs"
 uint8_t Counter_Adder_get(Counter * self)
 ;
-#line 28 "__impl__.rs"
-uint8_t bump(Adder * p)
+static const Adder_vt rsx_vt_Counter_Adder = {
+    .add = (uint8_t (*)(void *_self, uint8_t x))Counter_Adder_add,
+    .get = (uint8_t (*)(void *_self))Counter_Adder_get,
+};
+#line 35 "__impl__.rs"
+uint8_t bump(Adder_ref p)
 ;
-#line 33 "__impl__.rs"
-uint8_t peek(const Adder * p)
+#line 40 "__impl__.rs"
+uint8_t peek(Adder_ref p)
 ;
-#line 37 "__impl__.rs"
+#line 46 "__impl__.rs"
+Adder_ref pick(Counter * c)
+;
+#line 50 "__impl__.rs"
 uint8_t smoke(void)
 ;
-#line 19 "__impl__.rs"
+#line 61 "__impl__.rs"
+uint8_t smoke_values(void)
+;
+#line 26 "__impl__.rs"
 uint8_t Counter_Adder_add(Counter * self, uint8_t x)
 {
     ((self)->v) = (((self)->v) + x);
     return ((self)->v);
 }
 
-#line 23 "__impl__.rs"
+#line 30 "__impl__.rs"
 uint8_t Counter_Adder_get(Counter * self)
 {
     return ((self)->v);
 }
 
-#line 28 "__impl__.rs"
-uint8_t bump(Adder * p)
+#line 35 "__impl__.rs"
+uint8_t bump(Adder_ref p)
 {
-    uint8_t a = p->add(p->_self, 1);
-    return p->add(p->_self, a);
+    uint8_t a = p.vt->add(p._self, 1);
+    return p.vt->add(p._self, a);
 }
 
-#line 33 "__impl__.rs"
-uint8_t peek(const Adder * p)
+#line 40 "__impl__.rs"
+uint8_t peek(Adder_ref p)
 {
-    return p->get(p->_self);
+    return p.vt->get(p._self);
 }
 
-#line 37 "__impl__.rs"
+#line 46 "__impl__.rs"
+Adder_ref pick(Counter * c)
+{
+    return (Adder_ref){ c, &rsx_vt_Counter_Adder };
+}
+
+#line 50 "__impl__.rs"
 uint8_t smoke(void)
 {
     Counter c = (Counter){ .v = 10 };
-    uint8_t t = bump(&(Adder){ ._self = (&c), .add = (uint8_t (*)(void *_self, uint8_t x))Counter_Adder_add, .get = (uint8_t (*)(void *_self))Counter_Adder_get });
-    uint8_t s = peek(&(Adder){ ._self = (&c), .add = (uint8_t (*)(void *_self, uint8_t x))Counter_Adder_add, .get = (uint8_t (*)(void *_self))Counter_Adder_get });
+    uint8_t t = bump((Adder_ref){ (&c), &rsx_vt_Counter_Adder });
+    uint8_t s = peek((Adder_ref){ (&c), &rsx_vt_Counter_Adder });
     return (t + s);
+}
+
+#line 61 "__impl__.rs"
+uint8_t smoke_values(void)
+{
+    Counter c = (Counter){ .v = 10 };
+    Adder_ref p = pick((&c));
+    Adder_ref q = p;
+    uint8_t u = q.vt->get(q._self);
+    Adder_ref r = q;
+    uint8_t w = bump(p);
+    return ((u + w) + peek(r));
 }
 

@@ -91,7 +91,11 @@ order, plus the `collect`/`count`/`sum`/`fold`/`for_each`/`all`/`any`/
 fuses to ONE C walk, no materialized intermediates; the statement's `let`
 binds the terminal's result),
 struct/tuple/tuple-struct `let`-destructuring with `..`/`mut`, nested
-`fn`, traits + dynamic dispatch, generics (monomorphized), single-arity
+`fn`, traits + dynamic dispatch as first-class trait-object values (`&dyn T`
+/ `&mut dyn T` are the 2-word fat-pair value `Trait_ref` — returnable,
+storable, copyable, shadowable, exactly Rust's fat-pointer semantics;
+dispatch is `p.vt->m(p._self, ..)` through one static vtable per
+`(type, trait)` pair), generics (monomorphized), single-arity
 `macro_rules!`, and capture-less closures as values.
 
 Refused, with a precise diagnostic (deliberate — a refusal beats a wrong lowering):
@@ -103,9 +107,9 @@ lone `.map().collect()` and `.all()` shapes keep their historical emitter),
 chains nested in a larger expression (the fused statement-expr lives at
 `let`/expression-statement level), a fn with more than 24 params (the
 signature table is 24 rows; past that it refuses rather than dropping the
-param and emitting a prototype that disagrees with every call), `dyn Trait` trait
-objects as first-class values, async blocks, and `macro_rules!` beyond one fixed
-arity. Each refusal names the construct so the boundary is discoverable.
+param and emitting a prototype that disagrees with every call), async blocks,
+and `macro_rules!` beyond one fixed arity. Each refusal names the construct so
+the boundary is discoverable.
 
 ## Optimization notes
 
@@ -119,29 +123,32 @@ Each now writes to a process-unique temp file and renames into place
 (`os.replace` on CPython, `os.rename` on µPy, same dir). Same content, no torn
 reads — a correctness fix that also unblocks concurrent template work.
 
-**Board builds/proofs are serial but could be parallel — three shared-state
-races block it.** `make firmware`/`firmware-prove` build four boards one after
-another. Each board compiles into its own `$(BUILD)=build/$(BOARD)-$(ENGINE)`
-dir (objects, `genhdr`, `cdn.log` all per-board), so the compiles are
-independent — but turning the four on concurrently exposes three shared
-artifacts that must be isolated first:
+**Board builds/proofs run all four boards at once — the three shared-state
+races are isolated.** `make firmware`/`firmware-prove` launch the four boards
+concurrently (background sub-makes, each board's exit status kept — the
+target fails if any board did). Each board compiles into its own
+`$(BUILD)=build/$(BOARD)-$(ENGINE)` dir (objects, `genhdr`, `cdn.log` all
+per-board), and the three shared artifacts that made concurrency unsafe are
+each isolated at the source:
 
 1. **Compiled templates** (`www/_compiled/`) — *fixed* above (atomic write).
-2. **`rustc` crate** — all four boards build `libfw_lock.a` with
-   `--crate-name fw_lock` concurrently; rustc's shared crate/incremental state
-   collides across the four same-named crates with different `--target`s and
-   yields `ld: … libfw_lock.a: file in wrong format`. Fix: a per-board crate
-   name (and matching link).
-3. **Live CDN port** — every `prove` starts a CDN on the shared `CDN_PORT`
-   (18124) that the firmware guest hardcodes (`port/upy/firmware_upy_cdn.py`),
-   and `port/live_cdn.sh` drops a leftover listener on that port; two proves
-   kill each other's server. Fix: a per-board port baked into each guest
-   (or keep proves serial and parallelize only the builds).
+2. **`rustc` crate** — a per-board crate name (`fw_lock_<board>`,
+   `port/fw_wamr.mk`) keeps rustc's codegen temporaries
+   (`fw_lock.<hash>-cgu.*.rcgu.o`, created in the make working directory)
+   from unlinking each other across four concurrently-archived crates
+   (`failed to build archive: failed to open object file`, `lld-link
+   unknown file type`). The archive path stays `$(BUILD)/libfw_lock.a` and
+   every symbol is `extern "C"`, so nothing downstream changes.
+3. **Live CDN port** — a per-board `CDN_PORT` (BIOS 18124, UEFI 18125,
+   ARMV7_QEMU 18126, ARMV7_RV1106 18127) baked into each firmware guest at
+   embed time (`port/upy.mk` rewrites the one `CDN_PORT` line in
+   `port/upy/firmware_upy_cdn.py`), so `port/live_cdn.sh` drops a leftover
+   listener only on its own board's port and parallel proves each talk to
+   their own server.
 
-With (2) and (3) isolated, clean-build wall clock drops roughly four-fold (the
+With all three isolated, clean-build wall clock drops roughly four-fold (the
 builds dominate; each board is serial internally, so per-board `-j` would race
 `genhdr` on a clean tree — the auto-deps `$(BUILD)/*.d` don't exist yet then).
-Tracked as the top build-speed item; the fast path (serial, cached) is unaffected.
 
 **Upstream mpwm merges must not flatten `ports/webassembly/mpconfigport.h`.**
 The metal-python port header carries local defines upstream has no use for —

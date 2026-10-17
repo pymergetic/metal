@@ -666,7 +666,15 @@ impl Lower {
                 return;
             }
         }
-        unsafe { self.emit_expr(v, locals) };
+        /* dyn coercion: `return &s;` from a fn typed `-> &dyn T`
+         * materializes the trait object against cur_ret (the pair
+         * (S, T) must impl; a missing pair leaves the plain value for
+         * typing to refuse). */
+        let rp = self.cur_ret.as_ptr();
+        let rl = self.cur_ret_len;
+        if !unsafe { self.dyn_coerce_to(v, rp, rl, locals) } {
+            unsafe { self.emit_expr(v, locals) };
+        }
     }
 
     /* Assign-side twin of emit_ret_value: `temp = expr` in a value
@@ -693,7 +701,14 @@ impl Lower {
                 return;
             }
         }
-        unsafe { self.emit_expr(v, locals) };
+        /* same dyn coercion as return: a value block typed `&dyn T`
+         * materializes the object when the arm/tail value is a concrete
+         * struct ref with the impl pair. */
+        let rp = self.cur_ret.as_ptr();
+        let rl = self.cur_ret_len;
+        if !unsafe { self.dyn_coerce_to(v, rp, rl, locals) } {
+            unsafe { self.emit_expr(v, locals) };
+        }
     }
 
     /* Is this return expression a zero-constructor the container plane
@@ -2357,6 +2372,35 @@ impl Lower {
                             *out.add(at) = 0;
                         }
                         return at;
+                    }
+                    /* `&dyn T` / `&mut dyn T` — the trait-object pair
+                     * VALUE `<T>_ref` ({ const void *_self; const T_vt
+                     * *vt; }), carried by value exactly like Rust's
+                     * `&dyn T` fat pointer: returnable, storable,
+                     * copyable. Test the path leaf (a trait path renders
+                     * its leaf), the same way the str case above does. */
+                    if unsafe { (*inner).kind } == pm_jit_rsx_ast_kind::TYPE {
+                        let it = unsafe { (*inner).text };
+                        let itl = unsafe { (*inner).text_len };
+                        if unsafe { z_eq(it, itl, b"path\0".as_ptr()) }
+                            || unsafe { z_eq(it, itl, b"gpath\0".as_ptr()) }
+                        {
+                            let ik = unsafe { (*inner).kids };
+                            let ikn = unsafe { (*inner).n_kids } as usize;
+                            if ikn == 1 {
+                                let leaf = unsafe { *ik.add(0) };
+                                let lt = unsafe { (*leaf).text };
+                                let ltl = unsafe { (*leaf).text_len };
+                                if ltl > 0 && unsafe { self.traits.find(lt, ltl) } < TRAIT_CAP {
+                                    at = unsafe { zput(out, cap, at, lt) };
+                                    at = unsafe { zput(out, cap, at, b"_ref\0".as_ptr()) };
+                                    unsafe {
+                                        *out.add(at) = 0;
+                                    }
+                                    return at;
+                                }
+                            }
+                        }
                     }
                     at = unsafe { zput(out, cap, at, b"const \0".as_ptr()) };
                     if unsafe { z_eq(text, text_len, b"&mut\0".as_ptr()) } {
@@ -4268,11 +4312,12 @@ impl Lower {
      * method's vtable fn-ptr sig is rendered here (the sig AST kids do
      * not outlive collect): `ret (*name)(void *_self, T p, ..)` — the
      * receiver is the DATA pointer the object carries, not the object
-     * itself (the trait object is `{ void *_self; fnptrs.. }`: a
-     * `&mut dyn T` lowers to `T *`, dispatch reads `p->m(p->_self, ..)`,
-     * and a coercion from `&mut S` materializes the object with
-     * `._self = &s` and the impl's mangled fns — the object carries both
-     * halves of Rust's fat pointer, C-style. A by-value self in a trait
+     * itself (the trait object is the pair VALUE `Trait_ref` = `{ const
+     * void *_self; const Trait_vt *vt; }`: `&dyn T` lowers to
+     * `Trait_ref`, dispatch reads `p.vt->m(p._self, ..)`, and a coercion
+     * from `&S` materializes the pair `(Trait_ref){ &s,
+     * &rsx_vt_Type_Trait }` — the object carries both halves of Rust's
+     * fat pointer, exactly the Rust model. A by-value self in a trait
      * is refused: the vtable slot cannot copy a value the caller has
      * no name for.) */
     unsafe fn collect_trait(&mut self, item: *const pm_jit_rsx_ast_t) {
@@ -6971,21 +7016,23 @@ impl Lower {
                         }
                     }
                 }
-                /* trait-object dispatch typing: the receiver's C type
-                 * names a declared trait (`&mut dyn T` lowers to `T *`)
-                 * — the method call's type is the vtable slot's return,
-                 * the `ret` prefix of the interned sig (the emission is
-                 * the p->m(p->_self, ..) dispatch). */
+                /* trait-object dispatch typing: the receiver's C type is
+                 * the trait-object pair VALUE (`&dyn T` / `&mut dyn T`
+                 * lower to `<T>_ref`) — the method call's type is the
+                 * vtable slot's return, the `ret` prefix of the interned
+                 * sig (the emission is the `s.vt->m(s._self, ..)`
+                 * dispatch). */
                 {
                     let recv0 = unsafe { *kids.add(0) };
                     let tb = self.arena_tmp();
                     let tl = unsafe { self.expr_ctype(recv0, tb, 128, locals) };
-                    if tl > 2 && unsafe { *tb.add(tl - 1) } == b'*' {
+                    /* the receiver is the pair VALUE `<T>_ref` */
+                    if tl >= 5 && unsafe { z_eq(tb.add(tl - 4), 4, b"_ref\0".as_ptr()) } {
                         let mut b0 = 0usize;
                         if tl > 6 && unsafe { z_eq(tb, 6, b"const \0".as_ptr()) } {
                             b0 = 6;
                         }
-                        let mut j = tl - 1;
+                        let mut j = tl - 4;
                         while j > b0 && unsafe { *tb.add(j - 1) } == b' ' {
                             j -= 1;
                         }

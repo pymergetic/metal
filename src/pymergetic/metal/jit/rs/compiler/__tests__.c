@@ -3131,9 +3131,13 @@ static int32_t test_trait_runtime_linked(void) {
         fprintf(stderr, "trait_rt: compile failed: %s\n", err);
         pm_util_mem_arena_destroy(arena); free(backing); return 242;
     }
-    /* (1) the object typedef carries the vtable shape: a `_self` data
-     * field plus one fn-ptr per trait method. */
-    if (strstr(c, "void *_self;") == NULL) {
+    /* (1) the trait-object plane: the vtable typedef carries one fn-ptr
+     * per trait method, and the fat pair `<T>_ref` carries the data
+     * pointer plus the vtable pointer — Rust's fat-pointer model. */
+    if (strstr(c, "const void *_self;") == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 243;
+    }
+    if (strstr(c, "const Sink_vt *vt;") == NULL) {
         pm_util_mem_arena_destroy(arena); free(backing); return 243;
     }
     if (strstr(c, "void (*put)(void *_self, uint32_t x);") == NULL) {
@@ -3147,12 +3151,18 @@ static int32_t test_trait_runtime_linked(void) {
     if (strstr(c, "Counter_Sink_put(Counter * self") == NULL) {
         pm_util_mem_arena_destroy(arena); free(backing); return 246;
     }
-    /* (3) the callsite dispatches through the object: `s->put(s->_self, ..)` */
-    if (strstr(c, "s->put(s->_self, v)") == NULL) {
+    /* (3) the callsite dispatches through the object:
+     * `s.vt->put(s._self, ..)` */
+    if (strstr(c, "s.vt->put(s._self, v)") == NULL) {
         pm_util_mem_arena_destroy(arena); free(backing); return 247;
     }
-    /* (4) the coercion materializes the object with the impl's fns */
-    if (strstr(c, "._self = (&c)") == NULL) {
+    /* (4) the coercion materializes the fat pair VALUE (copied by value
+     * anywhere it lands — return/store/copy), and the vtable static is
+     * emitted once per (type, trait) in the declare pass. */
+    if (strstr(c, "(Sink_ref){ (&c), &rsx_vt_Counter_Sink }") == NULL) {
+        pm_util_mem_arena_destroy(arena); free(backing); return 248;
+    }
+    if (strstr(c, "static const Sink_vt rsx_vt_Counter_Sink = {") == NULL) {
         pm_util_mem_arena_destroy(arena); free(backing); return 248;
     }
     /* (4b) the fn-ptr cast carries the slot's full fn-ptr type (params

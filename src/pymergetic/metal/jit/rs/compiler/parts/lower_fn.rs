@@ -567,6 +567,46 @@ impl Lower {
             }
             i += 1;
         }
+        /* The pair's vtable static — one per (type, trait), emitted in
+         * the declare pass (pass C: its method prototypes land above,
+         * every body comes later in pass D) so any body can reference
+         * it, use-before-impl included. The fat pair carries its
+         * ADDRESS, so no coercion site ever rebuilds the table:
+         * `static const T_vt rsx_vt_<S>_<T> = { .m = (cast)S_T_m, .. };`
+         * — the cast is emit_slot_cast (impl fns take `S *`, the slots
+         * take `void *`, same call shape). */
+        if trait_len > 0 && declare_only == 1 {
+            let tr = unsafe { self.traits.find(trait_name, trait_len) };
+            if tr < TRAIT_CAP {
+                unsafe { self.out.puts(b"static const \0".as_ptr()) };
+                unsafe { self.out.put(trait_name, trait_len) };
+                unsafe { self.out.puts(b"_vt \0".as_ptr()) };
+                unsafe { self.vt_emit_name(ty_name, ty_len, trait_name, trait_len) };
+                unsafe { self.out.puts(b" = {\n\0".as_ptr()) };
+                let mut m2 = 0usize;
+                while m2 < self.traits.m_counts[tr] {
+                    let row = tr * TRAIT_MCAP + m2;
+                    unsafe { self.out.puts(b"    .\0".as_ptr()) };
+                    unsafe {
+                        self.out
+                            .put(self.traits.m_names[row].as_ptr(), self.traits.m_name_lens[row])
+                    };
+                    unsafe { self.out.puts(b" = \0".as_ptr()) };
+                    unsafe { self.emit_slot_cast(row) };
+                    unsafe { self.out.put(ty_name, ty_len) };
+                    unsafe { self.out.putc(b'_') };
+                    unsafe { self.out.put(trait_name, trait_len) };
+                    unsafe { self.out.putc(b'_') };
+                    unsafe {
+                        self.out
+                            .put(self.traits.m_names[row].as_ptr(), self.traits.m_name_lens[row])
+                    };
+                    unsafe { self.out.puts(b",\n\0".as_ptr()) };
+                    m2 += 1;
+                }
+                unsafe { self.out.puts(b"};\n\0".as_ptr()) };
+            }
+        }
     }
 
     /* Emit a pending tuple typedef (signature slot s) — the shared
@@ -3295,10 +3335,14 @@ impl Lower {
         }
         false
     }
-    /* Trait-object typedef: `typedef struct { void *_self; <sig0>;
-     * <sig1>; .. } Name;` — the vtable inlined as fn-ptr fields, each
-     * taking the DATA pointer the object carries (sigs rendered at
-     * collect with a void* receiver). */
+    /* Trait-object plane: `typedef struct { <sig0>; <sig1>; .. } T_vt;`
+     * plus the fat pair `typedef struct { const void *_self; const T_vt
+     * *vt; } T_ref;`. A trait object is the Rust fat-pointer model — a
+     * 2-word VALUE copied around (`._self` is the concrete receiver every
+     * method takes, `.vt` the per-(type, trait) static the impl fills).
+     * By value, not a folded struct behind a block-scoped literal: a
+     * coerced object can be returned, stored and copied with the same
+     * lifetime story as Rust's `&dyn T`. */
     unsafe fn lower_trait_decl(&mut self, item: *const pm_jit_rsx_ast_t) {
         let tname = unsafe { (*item).text };
         let tlen = unsafe { (*item).text_len };
@@ -3309,7 +3353,7 @@ impl Lower {
             }
             return;
         }
-        unsafe { self.out.puts(b"typedef struct {\n    void *_self;\n".as_ptr()) };
+        unsafe { self.out.puts(b"typedef struct {\n".as_ptr()) };
         let mut m = 0usize;
         while m < self.traits.m_counts[t] {
             let row = t * TRAIT_MCAP + m;
@@ -3325,7 +3369,12 @@ impl Lower {
         }
         unsafe { self.out.puts(b"} ".as_ptr()) };
         unsafe { self.out.put(tname, tlen) };
-        unsafe { self.out.puts(b";\n".as_ptr()) };
+        unsafe { self.out.puts(b"_vt;\n\0".as_ptr()) };
+        unsafe { self.out.puts(b"typedef struct {\n    const void *_self;\n    const \0".as_ptr()) };
+        unsafe { self.out.put(tname, tlen) };
+        unsafe { self.out.puts(b"_vt *vt;\n} \0".as_ptr()) };
+        unsafe { self.out.put(tname, tlen) };
+        unsafe { self.out.puts(b"_ref;\n\0".as_ptr()) };
     }
 
     /* ================= closures as values =================

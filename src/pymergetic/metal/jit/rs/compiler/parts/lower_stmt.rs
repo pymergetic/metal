@@ -1208,7 +1208,14 @@ impl Lower {
             }
         }
         if !is_none && some_v.is_null() {
-            unsafe { self.emit_expr(init, locals) };
+            /* dyn coercion at a binding: `let p: &dyn T = &s;` (and the
+             * shadow-reuse `p = &s2;`) materializes the trait object when
+             * the declared type is a trait ref and the init is a concrete
+             * struct ref whose unit impls the pair. Anything else emits
+             * the plain value. */
+            if !unsafe { self.dyn_coerce_to(init, ct, ct_len, locals) } {
+                unsafe { self.emit_expr(init, locals) };
+            }
             return;
         }
         if ct_len >= 8 && unsafe { z_eq(ct, 8, b"rsx_opt_\0".as_ptr()) } {

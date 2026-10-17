@@ -114,19 +114,23 @@
 // - `fn` -> C prototype + body; `unsafe`/`extern "C"`/`const` qualifiers
 //   drop (C has no unsafe). Methods -> free functions `Type_method` (trait
 //   impls: `Type_Trait_method`); `&self`/`&mut self` become `Type *self`.
-// - `trait` + `impl Trait for Type` lower a C trait-object plane: the
-//   trait decl emits `typedef struct { void *_self; RET (*m)(void *_self,
-//   ..); .. } Trait;` (vtable inlined as fields), `&mut dyn T` is `T *`,
-//   and a `Trait *` method call dispatches `p->m(p->_self, ..)` through
-//   the object's slot. A coercion `&mut s` -> `&mut dyn T` materializes
-//   `&(Trait){ ._self = &s, .m = Type_Trait_m, .. }` (one method fn cast
-//   per slot) — the object carries both halves of Rust's fat pointer,
-//   C-style, and the literal lives for the call (C99). A trait method is
-//   dispatched even when its name matches a convenience fill (`add`,
-//   `next`, …) — the vtable wins over the name-keyed integer/string
-//   fills. Refused: by-value `self` in a trait (the vtable slot cannot
-//   copy a value the caller has no name for) and a `(Type, Trait)` pair
-//   the unit never impls (never a bare cast dispatching NULL slots).
+// - `trait` + `impl Trait for Type` lower a C trait-object plane — Rust's
+//   fat-pointer model as a 2-word VALUE: the trait decl emits
+//   `typedef struct { RET (*m)(void *_self, ..); .. } Trait_vt;` plus
+//   `typedef struct { const void *_self; const Trait_vt *vt; } Trait_ref;`,
+//   and `&dyn T` / `&mut dyn T` is `Trait_ref` — carried by value
+//   (returnable, storable, copyable; never a block-lifetime compound
+//   literal). A pair method call dispatches `p.vt->m(p._self, ..)`. A
+//   coercion `&s` -> `&dyn T` materializes the pair `(Trait_ref){ &s,
+//   &rsx_vt_Type_Trait }`, referencing the per-(type, trait) static
+//   `static const Trait_vt rsx_vt_Type_Trait = { .m = (cast)Type_Trait_m,
+//   .. };` emitted once in the declare pass (one method fn cast per
+//   slot). A trait method is dispatched even when its name matches a
+//   convenience fill (`add`, `next`, …) — the vtable wins over the
+//   name-keyed integer/string fills. Refused: by-value `self` in a trait
+//   (the vtable slot cannot copy a value the caller has no name for) and
+//   a `(Type, Trait)` pair the unit never impls (never a bare cast
+//   dispatching NULL slots).
 // - `match` lowers to an `if`/`else` chain. Supported patterns: literals,
 //   enum variant paths (incl. payload binds on data-carrying variants and
 //   struct variants), `_`, `None`, `Some(bind)` (Option-of-pointer only —

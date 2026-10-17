@@ -2263,6 +2263,153 @@ impl Lower {
         unsafe { self.emit_expr(rhs, locals) };
     }
 
+    /* dyn coercion in a value position. `exp`/`expl` is the expected C
+     * type: when it is a trait object VALUE (`<T>_ref`, what ctype spells
+     * for `&dyn T` / `&mut dyn T`) and `arg` is a concrete struct ref
+     * (`S *` / `const S *`) whose unit impls the trait — materialize the
+     * object as the fat pair `(T_ref){ <arg>, &rsx_vt_<S>_<T> }`. The
+     * pair is a 2-word value copied by Rust's fat-pointer semantics:
+     * safe to return, store and copy — never a block-lifetime compound
+     * literal that dangles past its expression. A pair (S, Trait) the
+     * unit never impls — or any other shape at all — returns false
+     * without emitting anything: the caller then emits the plain value
+     * and TCC flags a genuinely wrong side. Never a bare cast that would
+     * dispatch NULL slots. */
+    pub(crate) unsafe fn dyn_coerce_to(
+        &mut self,
+        arg: *const pm_jit_rsx_ast_t,
+        exp: *const u8,
+        expl: usize,
+        locals: *mut LocalTab,
+    ) -> bool {
+        /* expected `<T>_ref` — the trait-object pair VALUE ctype spells
+         * for `&dyn T` / `&mut dyn T`? Strip a `const ` prefix and the
+         * `_ref` suffix — the trait is interned by its bare name. */
+        let mut ptb = 0usize;
+        if expl > 6 && unsafe { z_eq(exp, 6, b"const \0".as_ptr()) } {
+            ptb = 6;
+        }
+        if expl < ptb + 5 || !unsafe { z_eq(exp.add(expl - 4), 4, b"_ref\0".as_ptr()) } {
+            return false;
+        }
+        let pl2 = expl - 4;
+        let tr = unsafe { self.traits.find(exp.add(ptb), pl2 - ptb) };
+        if tr >= TRAIT_CAP {
+            return false;
+        }
+        let act = self.arena_tmp();
+        let al = unsafe { self.expr_ctype(arg, act, 128, locals) };
+        /* arg `S *` (or `const S *`)? An unknown arg type (al == 0) falls
+         * out here too — the caller emits the plain value. */
+        if al <= 2 || unsafe { *act.add(al - 1) } != b'*' {
+            return false;
+        }
+        let mut al2 = al - 1;
+        while al2 > 0 && unsafe { *act.add(al2 - 1) } == b' ' {
+            al2 -= 1;
+        }
+        let mut acb = 0usize;
+        if al2 > 6 && unsafe { z_eq(act, 6, b"const \0".as_ptr()) } {
+            acb = 6;
+        }
+        /* find the ti pair (S, Trait) */
+        let mut p2 = 0usize;
+        while p2 < self.ti_n {
+            let s_nm = self.ti_self[p2].as_ptr();
+            let s_ln = self.ti_self_lens[p2];
+            let t_nm2 = self.ti_trait[p2].as_ptr();
+            let t_ln2 = self.ti_trait_lens[p2];
+            if s_ln == al2 - acb
+                && t_ln2 == pl2 - ptb
+                && unsafe { z_eq(act.add(acb), al2 - acb, s_nm) }
+                && unsafe { z_eq(exp.add(ptb), pl2 - ptb, t_nm2) }
+            {
+                /* materialize the fat pair VALUE `(T_ref){ <arg>,
+                 * &rsx_vt_<S>_<T> }` — the Rust fat-pointer model: the
+                 * pair is copied BY VALUE wherever it lands (return,
+                 * store, copy) and never dangles the way a block-lifetime
+                 * compound literal behind `&` would. */
+                self.out.putc(b'(');
+                self.out.put(exp.add(ptb), pl2 - ptb);
+                self.out.puts(b"_ref){ \0".as_ptr());
+                unsafe { self.emit_expr(arg, locals) };
+                self.out.puts(b", &\0".as_ptr());
+                unsafe { self.vt_emit_name(s_nm, s_ln, t_nm2, t_ln2) };
+                self.out.puts(b" }\0".as_ptr());
+                return true;
+            }
+            p2 += 1;
+        }
+        /* pair the unit never impls: no coercion — the caller emits the
+         * plain value and the mismatch surfaces at typing/TCC time. */
+        false
+    }
+
+    /* The per-(type, trait) vtable static's name: `rsx_vt_<S>_<T>` —
+     * deterministic, so the selfhost fixed point holds. */
+    pub(crate) unsafe fn vt_emit_name(
+        &mut self,
+        s_nm: *const u8,
+        s_ln: usize,
+        t_nm: *const u8,
+        t_ln: usize,
+    ) {
+        self.out.puts(b"rsx_vt_\0".as_ptr());
+        self.out.put(s_nm, s_ln);
+        self.out.putc(b'_');
+        self.out.put(t_nm, t_ln);
+    }
+
+    /* The fn-ptr cast to a vtable slot's type — the impl fn takes `S *`,
+     * the slot takes `void *` (same call shape; the static init still
+     * needs the explicit conversion: gcc -Wpedantic and tcc both flag
+     * the implicit one). The cast type is the slot sig with the name
+     * spliced out: `ret (*m)(..)` -> `ret (*)(..)`. */
+    pub(crate) unsafe fn emit_slot_cast(&mut self, row: usize) {
+        self.out.putc(b'(');
+        {
+            let sg = self.traits.m_sigs[row].as_ptr();
+            let sl = self.traits.m_sig_lens[row];
+            /* find "(*" then the matching name end ")" — usize::MAX is
+             * not in the subset (self-host: it would refuse), a found
+             * flag + plain usize carry the same sentinel contract. */
+            let mut a = 0usize;
+            let mut name_at = 0usize;
+            let mut name_end = 0usize;
+            let mut have = false;
+            while a + 1 < sl {
+                if unsafe { *sg.add(a) } == b'(' && unsafe { *sg.add(a + 1) } == b'*' {
+                    name_at = a + 2;
+                    have = true;
+                    break;
+                }
+                a += 1;
+            }
+            if have {
+                let mut b3 = name_at;
+                while b3 < sl {
+                    if unsafe { *sg.add(b3) } == b')' {
+                        name_end = b3;
+                        break;
+                    }
+                    b3 += 1;
+                }
+            }
+            if have && name_end > name_at {
+                let mut r = 0usize;
+                while r < sl {
+                    if r >= name_at && r < name_end {
+                        r += 1;
+                        continue;
+                    }
+                    self.out.putc(unsafe { *sg.add(r) });
+                    r += 1;
+                }
+            }
+        }
+        self.out.putc(b')');
+    }
+
     /* Call: callee path + known core fns; else direct name with args. */
     unsafe fn emit_call(&mut self, e: *const pm_jit_rsx_ast_t, locals: *mut LocalTab) {
         let kids = unsafe { (*e).kids };
@@ -3362,156 +3509,20 @@ impl Lower {
                         /* dyn coercion: the param is a trait object
                          * (`Trait *`) and the arg is a concrete struct
                          * ref (`S *`) whose unit impls the trait —
-                         * materialize the object as a compound literal:
-                         * `&(Trait){ ._self = <arg>, .m = S_Trait_m, .. }`.
-                         * The literal lives for the full call expression
-                         * (C99), exactly Rust's reborrow window. A pair
-                         * (S, Trait) the unit never impls refuses loudly
-                         * — never a bare cast that would dispatch NULL
-                         * slots. */
+                         * materialize the object as a compound literal.
+                         * The full contract (literal shape, the pair
+                         * scan, the fn-ptr slot cast) lives in
+                         * dyn_coerce_to, shared with the binding and
+                         * return paths. */
                         let mut done_coerce = false;
                         if callok && !cname.is_null() && cnamelen > 0 {
                             let pt = self.arena_tmp();
                             let pl = unsafe {
                                 (*self.fns).param_ctype(cname, cnamelen, i, pt)
                             };
-                            /* param `Trait *` (or `const Trait *` for the
-                             * shared `&dyn T`)? Strip the trailing ` *` and
-                             * any `const ` — the trait is interned by its
-                             * bare name and the literal is spelled with it. */
-                            if pl > 2 && unsafe { *pt.add(pl - 1) } == b'*' {
-                                let mut pl2 = pl - 1;
-                                while pl2 > 0 && unsafe { *pt.add(pl2 - 1) } == b' ' {
-                                    pl2 -= 1;
-                                }
-                                let mut ptb = 0usize;
-                                if pl2 > 6 && unsafe { z_eq(pt, 6, b"const \0".as_ptr()) } {
-                                    ptb = 6;
-                                }
-                                let tr = unsafe { self.traits.find(pt.add(ptb), pl2 - ptb) };
-                                if tr < TRAIT_CAP {
-                                    let act = self.arena_tmp();
-                                    let al = unsafe {
-                                        self.expr_ctype(*ak.add(i), act, 128, locals)
-                                    };
-                                    /* arg `S *` (or `const S *`)? */
-                                    if al > 2 && unsafe { *act.add(al - 1) } == b'*' {
-                                        let mut al2 = al - 1;
-                                        while al2 > 0 && unsafe { *act.add(al2 - 1) } == b' ' {
-                                            al2 -= 1;
-                                        }
-                                        let mut acb = 0usize;
-                                        if al2 > 6
-                                            && unsafe { z_eq(act, 6, b"const \0".as_ptr()) }
-                                        {
-                                            acb = 6;
-                                        }
-                                        /* find the ti pair (S, Trait) */
-                                        let mut p2 = 0usize;
-                                        while p2 < self.ti_n {
-                                            let s_nm = self.ti_self[p2].as_ptr();
-                                            let s_ln = self.ti_self_lens[p2];
-                                            let t_nm2 = self.ti_trait[p2].as_ptr();
-                                            let t_ln2 = self.ti_trait_lens[p2];
-                                            if s_ln == al2 - acb
-                                                && t_ln2 == pl2 - ptb
-                                                && unsafe { z_eq(act.add(acb), al2 - acb, s_nm) }
-                                                && unsafe { z_eq(pt.add(ptb), pl2 - ptb, t_nm2) }
-                                            {
-                                                /* materialize */
-                                                self.out.puts(b"&(\0".as_ptr());
-                                                self.out.put(pt.add(ptb), pl2 - ptb);
-                                                self.out.puts(b"){ ._self = \0".as_ptr());
-                                                unsafe {
-                                                    self.emit_expr(*ak.add(i), locals)
-                                                };
-                                                let mut m2 = 0usize;
-                                                while m2 < self.traits.m_counts[tr] {
-                                                    let row = tr * TRAIT_MCAP + m2;
-                                                    self.out.puts(b", .\0".as_ptr());
-                                                    self.out.put(
-                                                        self.traits.m_names[row].as_ptr(),
-                                                        self.traits.m_name_lens[row],
-                                                    );
-                                                    self.out.puts(b" = \0".as_ptr());
-                                                    /* cast to the slot's fn-ptr type: the
-                                                     * impl fn takes S*, the slot takes
-                                                     * void* — same call shape, but the
-                                                     * init needs the explicit conversion
-                                                     * (gcc -Wpedantic and tcc both flag
-                                                     * the implicit one). The cast type is
-                                                     * the sig with the name spliced out:
-                                                     * `ret (*m)(..)` -> `ret (*)(..)`. */
-                                                    self.out.putc(b'(');
-                                                    {
-                                                        let sg = self.traits.m_sigs[row].as_ptr();
-                                                        let sl = self.traits.m_sig_lens[row];
-                                                        /* find "(*" then the matching name end ")"
-                                                         * — usize::MAX is not in the subset
-                                                         * (self-host: it would refuse), a
-                                                         * found flag + plain usize carry
-                                                         * the same sentinel contract. */
-                                                        let mut a = 0usize;
-                                                        let mut name_at = 0usize;
-                                                        let mut name_end = 0usize;
-                                                        let mut have = false;
-                                                        while a + 1 < sl {
-                                                            if unsafe { *sg.add(a) } == b'('
-                                                                && unsafe { *sg.add(a + 1) } == b'*'
-                                                            {
-                                                                name_at = a + 2;
-                                                                have = true;
-                                                                break;
-                                                            }
-                                                            a += 1;
-                                                        }
-                                                        if have {
-                                                            let mut b3 = name_at;
-                                                            while b3 < sl {
-                                                                if unsafe { *sg.add(b3) } == b')' {
-                                                                    name_end = b3;
-                                                                    break;
-                                                                }
-                                                                b3 += 1;
-                                                            }
-                                                        }
-                                                        if have && name_end > name_at {
-                                                            let mut r = 0usize;
-                                                            while r < sl {
-                                                                if r >= name_at && r < name_end {
-                                                                    r += 1;
-                                                                    continue;
-                                                                }
-                                                                self.out.putc(unsafe { *sg.add(r) });
-                                                                r += 1;
-                                                            }
-                                                        }
-                                                    }
-                                                    self.out.puts(b")\0".as_ptr());
-                                                    self.out.put(s_nm, s_ln);
-                                                    self.out.putc(b'_');
-                                                    self.out.put(pt.add(ptb), pl2 - ptb);
-                                                    self.out.putc(b'_');
-                                                    self.out.put(
-                                                        self.traits.m_names[row].as_ptr(),
-                                                        self.traits.m_name_lens[row],
-                                                    );
-                                                    m2 += 1;
-                                                }
-                                                self.out.puts(b" }\0".as_ptr());
-                                                done_coerce = true;
-                                                break;
-                                            }
-                                            p2 += 1;
-                                        }
-                                    }
-                                    /* arg type unknown (al == 0): the
-                                     * pair scan found nothing — the
-                                     * plain emit below passes the arg
-                                     * as-is and the C compiler flags a
-                                     * genuinely wrong arg at TCC time. */
-                                }
-                            }
+                            done_coerce = unsafe {
+                                self.dyn_coerce_to(*ak.add(i), pt, pl, locals)
+                            };
                         }
                         if !done_coerce {
                             /* `&arr` (borrow of a fixed array `T [N]`) into
@@ -4432,16 +4443,16 @@ impl Lower {
         let mlen = unsafe { (*name).text_len };
         let an = unsafe { (*args).n_kids } as usize;
         let ak = unsafe { (*args).kids };
-        /* Trait-object dispatch FIRST: when the receiver's C type names a
-         * declared trait (a `&mut dyn T` param/local lowers to `T *`), the
-         * method call is a vtable slot — `p->m(p->_self, ..)` — regardless
-         * of its name. A trait method named `add`/`next`/… must dispatch
-         * through the object, never fall into the name-keyed convenience
-         * fills below (which would rewrite `p.add(1)` as `(p + 1)`). The
-         * receiver must arrive as the object pointer (every trait receiver
-         * in the subset is `&self`/`&mut self`; by-value self was refused
-         * at collect), so the recv expression itself is the first
-         * argument's data pointer. */
+        /* Trait-object dispatch FIRST: when the receiver's C type is a
+         * trait object VALUE (`<T>_ref`, the fat pair ctype spells for a
+         * `&dyn T` / `&mut dyn T`), the method call is a vtable slot —
+         * `p.vt->m(p._self, ..)` — regardless of its name. A trait
+         * method named `add`/`next`/… must dispatch through the object,
+         * never fall into the name-keyed convenience fills below (which
+         * would rewrite `p.add(1)` as `(p + 1)`). The receiver must
+         * arrive as the object value (every trait receiver in the subset
+         * is `&self`/`&mut self`; by-value self was refused at collect),
+         * so `recv._self` is the first argument's data pointer. */
         {
             let tbuf = self.arena_tmp();
             let tn = unsafe { self.expr_ctype(recv, tbuf, 128, locals) };
@@ -4449,27 +4460,21 @@ impl Lower {
             while j > 0 && unsafe { *tbuf.add(j - 1) } == b' ' {
                 j -= 1;
             }
-            if j > 0 && unsafe { *tbuf.add(j - 1) } == b'*' {
-                j -= 1;
-                while j > 0 && unsafe { *tbuf.add(j - 1) } == b' ' {
-                    j -= 1;
-                }
-            }
             /* strip a leading `const ` for &self receivers */
             let mut b0 = 0usize;
             if j >= 6 && unsafe { z_eq(tbuf, 6, b"const \0".as_ptr()) } {
                 b0 = 6;
             }
-            if j > b0 {
-                let tr = unsafe { self.traits.find(tbuf.add(b0), j - b0) };
+            /* the pair VALUE `<T>_ref` — the trait is the base name */
+            if j >= b0 + 5 && unsafe { z_eq(tbuf.add(j - 4), 4, b"_ref\0".as_ptr()) } {
+                let tr = unsafe { self.traits.find(tbuf.add(b0), j - 4 - b0) };
                 if tr < TRAIT_CAP && unsafe { self.traits.find_method(tr, mname, mlen) } {
                     unsafe { self.emit_expr(recv, locals) };
-                    self.out.putc(b'-');
-                    self.out.putc(b'>');
+                    self.out.puts(b".vt->\0".as_ptr());
                     self.out.put(mname, mlen);
                     self.out.puts(b"(\0".as_ptr());
                     unsafe { self.emit_expr(recv, locals) };
-                    self.out.puts(b"->_self\0".as_ptr());
+                    self.out.puts(b"._self\0".as_ptr());
                     if an > 0 {
                         let mut i = 0usize;
                         while i < an {
