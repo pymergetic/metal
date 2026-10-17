@@ -54,9 +54,19 @@
 // early-returns `0`/None). Closures: a capture-less closure lowers INLINE
 // in `.map()`/`.unwrap_or_else()`/for-loop position, and as a VALUE
 // (`let g: fn(u8)->u8 = |x: u8| x+1;`, `h(|x| ..)` fn-ptr args) it
-// becomes a synthesized static `rsx_clo_N` whose address is the value;
-// a closure that CAPTURES outer locals refuses as a value
-// (`rsx: unsupported: capturing closure as value`).
+// becomes a synthesized static `rsx_clo_N` whose address is the value.
+// A closure that CAPTURES outer locals is supported in LIMITED form:
+// bound by `let f = |x| ..captured..;` and DIRECTLY called (`f(x)`) —
+// the synthesized `rsx_clo_N` takes one leading `T *rsx_cap_<i>` per
+// capture (T = the captured local's body-view type), the let emits no
+// value (the binding is only the name), and the call site rewrites to
+// the designator with `&place` prepended per capture. Still refused:
+// a capturing closure in VALUE position (`rsx: unsupported: capturing
+// closure as value` — a fn pointer carries no environment), a fn-pointer
+// ascription on a capturing closure (`unsupported: fn-pointer ascription
+// on a capturing closure`), the closure's own binding as a capture
+// (`unsupported: closure referring to its own binding`), more than 8
+// captures, and fn-pointer/array capture types.
 //
 // Macros: `macro_rules! name { ( $x:expr, ... ) => { body } }` — one
 // fixed-arity matcher, metavariable kinds `expr`/`ident`/`literal` only,
@@ -104,6 +114,19 @@
 // - `fn` -> C prototype + body; `unsafe`/`extern "C"`/`const` qualifiers
 //   drop (C has no unsafe). Methods -> free functions `Type_method` (trait
 //   impls: `Type_Trait_method`); `&self`/`&mut self` become `Type *self`.
+// - `trait` + `impl Trait for Type` lower a C trait-object plane: the
+//   trait decl emits `typedef struct { void *_self; RET (*m)(void *_self,
+//   ..); .. } Trait;` (vtable inlined as fields), `&mut dyn T` is `T *`,
+//   and a `Trait *` method call dispatches `p->m(p->_self, ..)` through
+//   the object's slot. A coercion `&mut s` -> `&mut dyn T` materializes
+//   `&(Trait){ ._self = &s, .m = Type_Trait_m, .. }` (one method fn cast
+//   per slot) — the object carries both halves of Rust's fat pointer,
+//   C-style, and the literal lives for the call (C99). A trait method is
+//   dispatched even when its name matches a convenience fill (`add`,
+//   `next`, …) — the vtable wins over the name-keyed integer/string
+//   fills. Refused: by-value `self` in a trait (the vtable slot cannot
+//   copy a value the caller has no name for) and a `(Type, Trait)` pair
+//   the unit never impls (never a bare cast dispatching NULL slots).
 // - `match` lowers to an `if`/`else` chain. Supported patterns: literals,
 //   enum variant paths (incl. payload binds on data-carrying variants and
 //   struct variants), `_`, `None`, `Some(bind)` (Option-of-pointer only —

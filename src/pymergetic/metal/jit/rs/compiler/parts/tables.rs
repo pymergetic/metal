@@ -36,13 +36,18 @@ const GEN_SUBSZ: usize = 96;
 const MAC_CAP: usize = 8;
 const MAC_PARAMS: usize = 4;
 /* Closures-as-values plane: synthesized static C fns (`rsx_clo_<n>`) per
- * fn-body batch. One slot per capture-less closure used as a value in one
- * body (the batch drains — and the cap frees — per fn). 32: a body that
- * mints more closures than that is writing an event table, not a
- * function; the refusal is honest. */
+ * fn-body batch. One slot per closure bound as a value in one body (the
+ * batch drains — and the cap frees — per fn). 32: a body that mints more
+ * closures than that is writing an event table, not a function; the
+ * refusal is honest. */
 const CLO_CAP: usize = 32;
 /* Params per synthesized closure fn (a plain C parameter list). */
 const CLO_MAXP: usize = 6;
+/* Captures per synthesized closure fn — prepended to the declared params
+ * as `T *rsx_cap_<i>` (the capture names re-render as `(*rsx_cap_<i>)`
+ * inside the body). 8: past that the closure is a context struct, not a
+ * closure; the refusal names the boundary. */
+const CLO_MAXC: usize = 8;
 const OPT_CAP: usize = 24;
 const ST_CAP: usize = 64;
 /* Tuple signature cap: distinct (A, B, ..) spellings per unit. Tuples

@@ -324,6 +324,39 @@ struct Lower {
     clo_ret_lens: [usize; CLO_CAP],
     clo_pcts: [[u8; 96]; CLO_CAP * CLO_MAXP],
     clo_pct_lens: [usize; CLO_CAP * CLO_MAXP],
+    /* Capturing closures: the capture list per slot (first-use order).
+     * Each capture is a leading `T *rsx_cap_<i>` param on the synthesized
+     * fn; the body re-renders the source name as `(*rsx_cap_<i>)` through
+     * the LocalTab cname rows. The stored ctype is the body-view type T
+     * (unpointered — the param spelling adds ` *` at emission). */
+    clo_capns: [usize; CLO_CAP],
+    clo_cap_names: [[u8; 48]; CLO_CAP * CLO_MAXC],
+    clo_cap_name_lens: [usize; CLO_CAP * CLO_MAXC],
+    clo_cap_cts: [[u8; 96]; CLO_CAP * CLO_MAXC],
+    clo_cap_ct_lens: [usize; CLO_CAP * CLO_MAXC],
+    /* The let binding's own name while a closure body is analyzed — a
+     * reference to it is a capture candidate too (Rust refuses it as
+     * "use of unresolved binding"; here it refuses as a self-binding).
+     * NULL = no self name in play. */
+    clo_self_name: *const u8,
+    clo_self_len: usize,
+    /* Set when the capture/binder set overflowed (48 names) — the walk
+     * keeps going so the caller sees one honest refusal, never a
+     * silently truncated capture list. */
+    clo_cap_full: bool,
+    /* Nested closure typing: a closure whose body CALLS another closure
+     * that is still un-emitted (its let comes later in the same body) has
+     * no return type visible to the outer's tail inference. A pre-pass
+     * over the body types every closure LET first (innermost-first), each
+     * row carrying the closure's inferred RETURN ctype — a call through
+     * it (expr_ctype's CALL arm) types against the row before the
+     * closure is synthesized. Rows die with their Lower (one compile). */
+    clo_pend_nodes: [*const pm_jit_rsx_ast_t; CLO_CAP],
+    clo_pend_names: [[u8; 48]; CLO_CAP],
+    clo_pend_name_lens: [usize; CLO_CAP],
+    clo_pend_rets: [[u8; 96]; CLO_CAP],
+    clo_pend_ret_lens: [usize; CLO_CAP],
+    clo_pend_n: usize,
     clo_proto: Out,
     clo_defs: Out,
     fnbuf: Out,
@@ -5321,6 +5354,43 @@ impl Lower {
             let kids = unsafe { (*e).kids };
             if unsafe { (*e).n_kids } >= 1 {
                 let callee = unsafe { *kids.add(0) };
+                /* A capturing closure binding's direct call types as the
+                 * synthesized fn's own return (clo_sig computed it) — the
+                 * binding is not a local value, so no row lookup can see
+                 * it. */
+                if unsafe { (*callee).kind } == pm_jit_rsx_ast_kind::PATH
+                    && unsafe { (*callee).n_kids } as usize == 1
+                    && !locals.is_null()
+                {
+                    let cl0 = unsafe { *(*callee).kids.add(0) };
+                    let cl0t = unsafe { (*cl0).text };
+                    let cl0l = unsafe { (*cl0).text_len };
+                    let cslot = unsafe { (*locals).clo_find(cl0t, cl0l) };
+                    if cslot > 0 {
+                        let rl = self.clo_ret_lens[cslot - 1];
+                        if rl == 0 || rl >= cap {
+                            return 0;
+                        }
+                        let mut w = 0usize;
+                        while w < rl {
+                            unsafe {
+                                *out.add(w) = self.clo_rets[cslot - 1][w];
+                            }
+                            w += 1;
+                        }
+                        unsafe {
+                            *out.add(rl) = 0;
+                        }
+                        return rl;
+                    }
+                    /* not yet emitted (a nested closure whose let runs
+                     * later in the same body): the pending row carries its
+                     * inferred return */
+                    let pl2 = unsafe { self.clo_pend_ret(cl0t, cl0l, out, cap) };
+                    if pl2 > 0 {
+                        return pl2;
+                    }
+                }
                 /* `Box::leak(s)` — the leaked 'static borrow of a string
                  * value: the &str view (the arena-owned heap makes leak
                  * the identity; emit_call renders the argument as-is). */
@@ -8856,6 +8926,13 @@ struct LocalTab {
      * cost. */
     cnames: [*const u8; LOCAL_CAP],
     cname_lens: [usize; LOCAL_CAP],
+    /* Capturing-closure bindings: a let-bound closure WITH captures has no
+     * C value at all — the row exists only so direct calls rewrite to the
+     * synthesized fn with the capture args prepended. The row carries the
+     * synth slot + 1 (0 = ordinary local / capture-less closure value).
+     * Fresh rows always reset it — a recycled row must never leak a
+     * stale slot into a new binding. */
+    clo_slots: [u16; LOCAL_CAP],
     marks: [usize; 64],
     nmarks: usize,
     n: usize,
@@ -8954,7 +9031,11 @@ impl LocalTab {
                      * note, if any, was already consumed or belongs to
                      * this very binding — keep it (a re-execution of the
                      * same let re-locks; the scope-exit release still
-                     * pairs with the epilogue's acquire). */
+                     * pairs with the epilogue's acquire). A closure-slot
+                     * marker does NOT survive: the registration pass is
+                     * not the binding event, and the closure emitter
+                     * re-marks right after its own add. */
+                    self.clo_slots[s] = 0;
                     return;
                 }
             }
@@ -8987,10 +9068,12 @@ impl LocalTab {
         self.ctypes[s] = sp;
         self.ctype_lens[s] = ctlen;
         /* a recycled slot (a dropped scope's row) may still carry a
-         * rename-shadow's C spelling — a plain binding emits its own
-         * name, so the stale cname must not survive into this row */
+         * rename-shadow's C spelling or a closure-slot marker — a plain
+         * binding emits its own name, so neither stale note may survive
+         * into this row */
         self.cnames[s] = core::ptr::null_mut();
         self.cname_lens[s] = 0;
+        self.clo_slots[s] = 0;
         self.depths[s] = depth;
         self.epochs[s] = self.epoch;
         self.n += 1;
@@ -9051,6 +9134,7 @@ impl LocalTab {
                             k += 1;
                         }
                         if eq {
+                            self.clo_slots[s] = 0;
                             return;
                         }
                     }
@@ -9090,6 +9174,7 @@ impl LocalTab {
         }
         self.cnames[s] = cp;
         self.cname_lens[s] = clen;
+        self.clo_slots[s] = 0;
         self.depths[s] = depth;
         self.epochs[s] = self.epoch;
         self.n += 1;
@@ -9151,6 +9236,34 @@ impl LocalTab {
         let s = self.n - 1;
         self.guard_addrs[s] = p;
         self.guard_lens[s] = alen;
+    }
+
+    /* Tag the newest binding of this spelling as a capturing-closure
+     * binding (`slot + 1`; 0 clears — a capture-less or non-closure
+     * re-binding must not inherit the prior closure's rewrite). */
+    unsafe fn mark_clo(&mut self, name: *const u8, nlen: usize, slot: usize) {
+        let mut i = self.n;
+        while i > 0 {
+            i -= 1;
+            if self.name_lens[i] == nlen && unsafe { self.span_eq(i, name, nlen) } {
+                self.clo_slots[i] = slot as u16;
+                return;
+            }
+        }
+    }
+
+    /* The closure slot (slot + 1) behind a name right now, 0 when the
+     * name is not a capturing-closure binding — the innermost binding
+     * wins, exactly like lookup. */
+    unsafe fn clo_find(&self, name: *const u8, nlen: usize) -> usize {
+        let mut i = self.n;
+        while i > 0 {
+            i -= 1;
+            if self.name_lens[i] == nlen && unsafe { self.span_eq(i, name, nlen) } {
+                return self.clo_slots[i] as usize;
+            }
+        }
+        0
     }
 
     unsafe fn lookup(&self, name: *const u8, nlen: usize, out: *mut u8) -> usize {

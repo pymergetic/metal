@@ -3416,12 +3416,19 @@ impl Lower {
      * (pcts has CLO_MAXP rows of 96): the expected fn-ptr TYPE node when
      * the context knows one (a let's `: fn(..) -> R` ascription), else the
      * closure's own `: T` annotations plus the body's inferred return
-     * (computed with the params visible). Returns the param count; 0 with
-     * bad set on a refusal. */
+     * (computed with the params and the captures visible — a capture's
+     * type comes from the outer binding). The capture list (set[nbind..nset))
+     * is the caller's collected capture analysis. Returns the DECLARED
+     * param count; 0 with bad set on a refusal. */
     unsafe fn clo_sig(
         &mut self,
         clo: *const pm_jit_rsx_ast_t,
         exp_ty: *const pm_jit_rsx_ast_t,
+        locals: *mut LocalTab,
+        set: *mut u8,
+        set_lens: *mut usize,
+        nset: usize,
+        nbind: usize,
         names: *mut *const u8,
         name_lens: *mut usize,
         pcts: *mut u8,
@@ -3431,6 +3438,21 @@ impl Lower {
         bad: *mut bool,
     ) -> usize {
         let line = unsafe { (*clo).line };
+        /* A `fn(..) -> R` ascription is a real C fn pointer — a capturing
+         * closure cannot be one (the same line Rust draws: only
+         * capture-less closures coerce to `fn`). */
+        if !exp_ty.is_null() && nset > nbind {
+            unsafe {
+                self.err(
+                    b"unsupported: fn-pointer ascription on a capturing closure\0".as_ptr(),
+                    line,
+                );
+            }
+            unsafe {
+                *bad = true;
+            }
+            return 0;
+        }
         let mut anns: [*const pm_jit_rsx_ast_t; CLO_MAXP] = [core::ptr::null(); CLO_MAXP];
         let np = unsafe {
             self.clo_params(clo, names, name_lens, anns.as_mut_ptr(), CLO_MAXP, bad)
@@ -3632,7 +3654,35 @@ impl Lower {
             }
             i += 1;
         }
+        /* captures type like the locals they shadow — a self-name hit
+         * has no outer row (that refusal fires in clo_synth), so an
+         * unresolvable capture here is simply left to the tail typing to
+         * trip over. */
+        i = nbind;
+        while i < nset {
+            let nm = unsafe { set.add(i * 48) };
+            let nl = unsafe { *set_lens.add(i) };
+            let cb = self.arena_tmp();
+            let cl = unsafe { self.clo_cap_ctype(locals, nm, nl, cb, 160) };
+            if cl > 0 {
+                unsafe {
+                    (*loc2).add(nm, nl, cb, cl, 1);
+                }
+            }
+            i += 1;
+        }
+        /* Nested closures typed first: the tail may CALL one whose let
+         * has not been reached yet (a body-local `let inner = …` that the
+         * tail invokes) — pre-register each so expr_ctype's CALL arm can
+         * resolve it. Opportunistic: a nested closure the pre-pass cannot
+         * type is simply left unregistered, and only a tail that actually
+         * calls it trips the return-inference refusal below. */
+        let pend_base = self.clo_pend_n;
+        unsafe {
+            self.clo_pend_body(body, loc2);
+        }
         let rn = unsafe { self.expr_ctype(vb, ret_ct, 96, loc2) };
+        self.clo_pend_n = pend_base;
         unsafe {
             pm_util_mem_free(self.arena, loc2 as *mut u8);
         }
@@ -3654,13 +3704,39 @@ impl Lower {
     /* A closure in typed position (an unannotated `let g = |x: u8| ..`)
      * renders as its C fn-pointer spelling `RET (*)(params)` — the same
      * spelling the fnptr type arm builds, so emit_declarator places the
-     * name inside the parens. */
+     * name inside the parens. A capturing closure's spelling carries the
+     * capture env params first (`RET (*)(T *, params)` — the real ABI of
+     * the synthesized fn; the binding itself emits no declarator, but the
+     * spelling keeps shadow/reuse matching and value-use typing honest).
+     * A capture with no resolvable outer type (the self-binding shape)
+     * drops out here — the self-name refusal fires at synthesis. */
     unsafe fn clo_type_of(
         &mut self,
         clo: *const pm_jit_rsx_ast_t,
+        locals: *mut LocalTab,
+        self_name: *const u8,
+        self_len: usize,
         out: *mut u8,
         cap: usize,
     ) -> usize {
+        let mut set: [[u8; 48]; 48] = [[0; 48]; 48];
+        let mut set_lens: [usize; 48] = [0; 48];
+        let mut nset: usize = 0;
+        let mut nbind: usize = 0;
+        if !unsafe {
+            self.clo_capture(
+                clo,
+                locals,
+                self_name,
+                self_len,
+                set[0].as_mut_ptr(),
+                set_lens.as_mut_ptr(),
+                &mut nset,
+                &mut nbind,
+            )
+        } {
+            return 0;
+        }
         let mut names: [*const u8; CLO_MAXP] = [core::ptr::null(); CLO_MAXP];
         let mut name_lens: [usize; CLO_MAXP] = [0; CLO_MAXP];
         let mut pcts: [[u8; 96]; CLO_MAXP] = [[0; 96]; CLO_MAXP];
@@ -3672,6 +3748,11 @@ impl Lower {
             self.clo_sig(
                 clo,
                 core::ptr::null(),
+                locals,
+                set[0].as_mut_ptr(),
+                set_lens.as_mut_ptr(),
+                nset,
+                nbind,
                 names.as_mut_ptr(),
                 name_lens.as_mut_ptr(),
                 pcts[0].as_mut_ptr(),
@@ -3687,7 +3768,24 @@ impl Lower {
         let mut at = unsafe { bput(out, cap, 0, ret_ct.as_ptr(), ret_len) };
         at = unsafe { bput(out, cap, at, b" (*)(\0".as_ptr(), 5) };
         let mut first = true;
-        let mut i = 0usize;
+        let mut i = nbind;
+        while i < nset {
+            let nm: *const u8 = unsafe { set[0].as_ptr().add(i * 48) };
+            let nl = set_lens[i];
+            let cb = self.arena_tmp();
+            let cl = unsafe { self.clo_cap_ctype(locals, nm, nl, cb, 160) };
+            if cl > 0 {
+                let pb = self.arena_tmp();
+                let pl = unsafe { Lower::clo_cap_ptr(pb, 160, cb, cl) };
+                if !first {
+                    at = unsafe { bput(out, cap, at, b", \0".as_ptr(), 2) };
+                }
+                first = false;
+                at = unsafe { bput(out, cap, at, pb, pl) };
+            }
+            i += 1;
+        }
+        i = 0;
         while i < np {
             if !first {
                 at = unsafe { bput(out, cap, at, b", \0".as_ptr(), 2) };
@@ -3713,12 +3811,26 @@ impl Lower {
      * value. Returns the batch slot + 1 (0 = refused). The prototype
      * appends to clo_proto; the def queues in the batch (drained at the
      * end of the body, ahead of the buffered fn text). */
+    /* Synthesize the static fn for a closure used as a value. Returns the
+     * batch slot + 1 (0 = refused). The prototype appends to clo_proto;
+     * the def queues in the batch (drained at the end of the body, ahead
+     * of the buffered fn text).
+     *
+     * Capture-less: the value IS the fn designator (a C fn pointer) and
+     * the let's declarator carries it. Capturing (allow_cap): each * capture becomes a leading `T *rsx_cap_<i>` param — the let emits no
+     * value at all, and direct calls rewrite to the designator with
+     * `&place` prepended per capture. Refused shapes: the self-binding
+     * reference, captures in value position (allow_cap false), more than
+     * CLO_MAXC captures, and fn-pointer/array capture types. */
     unsafe fn clo_synth(
         &mut self,
         clo: *const pm_jit_rsx_ast_t,
         locals: *mut LocalTab,
         exp_ty: *const pm_jit_rsx_ast_t,
         line: u32,
+        allow_cap: bool,
+        self_name: *const u8,
+        self_len: usize,
     ) -> usize {
         if self.cur_body.is_null() {
             unsafe {
@@ -3732,12 +3844,99 @@ impl Lower {
             }
             return 0;
         }
-        if unsafe { self.clo_capture(clo, locals) } {
+        let slot = self.clo_n;
+        let mut set: [[u8; 48]; 48] = [[0; 48]; 48];
+        let mut set_lens: [usize; 48] = [0; 48];
+        let mut nset: usize = 0;
+        let mut nbind: usize = 0;
+        if !unsafe {
+            self.clo_capture(
+                clo,
+                locals,
+                self_name,
+                self_len,
+                set[0].as_mut_ptr(),
+                set_lens.as_mut_ptr(),
+                &mut nset,
+                &mut nbind,
+            )
+        } {
+            unsafe {
+                self.err(b"unsupported: too many names in one closure\0".as_ptr(), line);
+            }
+            return 0;
+        }
+        /* the self-binding reference is refused: the value does not exist yet */
+        let mut i = nbind;
+        while i < nset {
+            let nm: *const u8 = unsafe { set[0].as_ptr().add(i * 48) };
+            let nl = set_lens[i];
+            if !self_name.is_null() && nl == self_len {
+                let mut same = true;
+                let mut j = 0usize;
+                while j < nl {
+                    if unsafe { *nm.add(j) } != unsafe { *self_name.add(j) } {
+                        same = false;
+                    }
+                    j += 1;
+                }
+                if same {
+                    unsafe {
+                        self.err(
+                            b"unsupported: closure referring to its own binding\0".as_ptr(),
+                            line,
+                        );
+                    }
+                    return 0;
+                }
+            }
+            i += 1;
+        }
+        let ncap = nset - nbind;
+        if ncap > 0 && !allow_cap {
             unsafe {
                 self.err(b"unsupported: capturing closure as value\0".as_ptr(), line);
             }
             return 0;
         }
+        if ncap > CLO_MAXC {
+            unsafe {
+                self.err(b"unsupported: too many closure captures\0".as_ptr(), line);
+            }
+            return 0;
+        }
+        /* capture body-view types: stored as the T of the `T *rsx_cap_<i>`
+         * params and of the loc2 body view `(*rsx_cap_<i>)` */
+        i = 0;
+        while i < ncap {
+            let nm: *const u8 = unsafe { set[0].as_ptr().add((nbind + i) * 48) };
+            let nl = set_lens[nbind + i];
+            let cb = self.arena_tmp();
+            let cl = unsafe { self.clo_cap_ctype(locals, nm, nl, cb, 160) };
+            if cl == 0 || cl >= 96 {
+                unsafe {
+                    self.err(
+                        b"unsupported: closure capture type - fn pointers and arrays do not capture\0".as_ptr(),
+                        line,
+                    );
+                }
+                return 0;
+            }
+            self.clo_cap_name_lens[slot * CLO_MAXC + i] = nl;
+            let mut j = 0usize;
+            while j < nl {
+                self.clo_cap_names[slot * CLO_MAXC + i][j] = unsafe { *nm.add(j) };
+                j += 1;
+            }
+            self.clo_cap_ct_lens[slot * CLO_MAXC + i] = cl;
+            j = 0;
+            while j < cl {
+                self.clo_cap_cts[slot * CLO_MAXC + i][j] = unsafe { *cb.add(j) };
+                j += 1;
+            }
+            i += 1;
+        }
+        self.clo_capns[slot] = ncap;
         let mut names: [*const u8; CLO_MAXP] = [core::ptr::null(); CLO_MAXP];
         let mut name_lens: [usize; CLO_MAXP] = [0; CLO_MAXP];
         let mut pcts: [[u8; 96]; CLO_MAXP] = [[0; 96]; CLO_MAXP];
@@ -3749,6 +3948,11 @@ impl Lower {
             self.clo_sig(
                 clo,
                 exp_ty,
+                locals,
+                set[0].as_mut_ptr(),
+                set_lens.as_mut_ptr(),
+                nset,
+                nbind,
                 names.as_mut_ptr(),
                 name_lens.as_mut_ptr(),
                 pcts[0].as_mut_ptr(),
@@ -3761,7 +3965,6 @@ impl Lower {
         if bad {
             return 0;
         }
-        let slot = self.clo_n;
         /* name: rsx_clo_<unit counter> (never reset — file-scope names) */
         let mut at = unsafe {
             zput(self.clo_names[slot].as_mut_ptr(), 24, 0, b"rsx_clo_\0".as_ptr())
@@ -3802,6 +4005,29 @@ impl Lower {
         self.out.put(self.clo_names[slot].as_ptr(), at);
         self.out.putc(b'(');
         let mut first = true;
+        /* capture params first: `T *rsx_cap_<i>` */
+        i = 0;
+        while i < ncap {
+            if !first {
+                self.out.puts(b", \0".as_ptr());
+            }
+            first = false;
+            let pb = self.arena_tmp();
+            let pl2 = unsafe {
+                Lower::clo_cap_ptr(
+                    pb,
+                    160,
+                    self.clo_cap_cts[slot * CLO_MAXC + i].as_ptr(),
+                    self.clo_cap_ct_lens[slot * CLO_MAXC + i],
+                )
+            };
+            let nb = self.arena_tmp();
+            let nl2 = unsafe { Lower::clo_cap_name(nb, 160, i) };
+            unsafe {
+                self.emit_declarator(pb, pl2, nb, nl2);
+            }
+            i += 1;
+        }
         i = 0;
         while i < np {
             if !first {
@@ -3863,6 +4089,32 @@ impl Lower {
             self.ok = false;
             return;
         }
+        /* capture body views at depth 0: the source capture name maps to
+         * `(*rsx_cap_<i>)` over the body-view type — every reference inside
+         * the body renders through it */
+        let mut ci = 0usize;
+        while ci < self.clo_capns[slot] {
+            let nm: *const u8 = self.clo_cap_names[slot * CLO_MAXC + ci].as_ptr();
+            let nl = self.clo_cap_name_lens[slot * CLO_MAXC + ci];
+            let nb = self.arena_tmp();
+            let nl2 = unsafe { Lower::clo_cap_name(nb, 160, ci) };
+            let cb = self.arena_tmp();
+            let mut at2 = unsafe { zput(cb, 160, 0, b"(*\0".as_ptr()) };
+            at2 = unsafe { bput(cb, 160, at2, nb, nl2) };
+            at2 = unsafe { zput(cb, 160, at2, b")\0".as_ptr()) };
+            unsafe {
+                (*loc2).add_renamed(
+                    nm,
+                    nl,
+                    cb,
+                    at2,
+                    self.clo_cap_cts[slot * CLO_MAXC + ci].as_ptr(),
+                    self.clo_cap_ct_lens[slot * CLO_MAXC + ci],
+                    0,
+                );
+            }
+            ci += 1;
+        }
         let mut i = 0usize;
         while i < np {
             let pc = self.clo_pcts[slot * CLO_MAXP + i].as_ptr();
@@ -3894,6 +4146,29 @@ impl Lower {
         self.out.put(self.clo_names[slot].as_ptr(), self.clo_name_lens[slot]);
         self.out.putc(b'(');
         let mut first = true;
+        /* capture params first: `T *rsx_cap_<i>` */
+        ci = 0;
+        while ci < self.clo_capns[slot] {
+            if !first {
+                self.out.puts(b", \0".as_ptr());
+            }
+            first = false;
+            let pb = self.arena_tmp();
+            let pl2 = unsafe {
+                Lower::clo_cap_ptr(
+                    pb,
+                    160,
+                    self.clo_cap_cts[slot * CLO_MAXC + ci].as_ptr(),
+                    self.clo_cap_ct_lens[slot * CLO_MAXC + ci],
+                )
+            };
+            let nb = self.arena_tmp();
+            let nl2 = unsafe { Lower::clo_cap_name(nb, 160, ci) };
+            unsafe {
+                self.emit_declarator(pb, pl2, nb, nl2);
+            }
+            ci += 1;
+        }
         i = 0;
         while i < np {
             if !first {
@@ -3950,11 +4225,82 @@ impl Lower {
      * Two walks over the closure subtree: clo_inner collects the names
      * the closure binds itself (its params — nested closures' too —, let
      * targets, for-loop vars, match-arm pattern binds); clo_uses then
-     * checks every name the body reads against the outer binding table.
-     * A hit is a capture; the synthesized static fn has no environment
-     * slot, so it refuses. Conservative by construction: a name the
-     * walks cannot classify reads as a capture (a refusal beats a wrong
-     * lowering). */
+     * appends every name the body reads against the outer binding table.
+     * Conservative by construction: a name the walks cannot classify
+     * lands in the list (a refusal beats a wrong lowering). */
+
+    /* One capture's body-view C type T — the outer binding's own ctype.
+     * 0 = refused: a fn-pointer or array capture cannot round-trip
+     * through a `T *` env slot (`T (**)(..)` / `T (*)[N]` are spellings
+     * the plain ` *` append cannot make), and an untyped name is not a
+     * capture candidate at all. */
+    unsafe fn clo_cap_ctype(
+        &mut self,
+        locals: *mut LocalTab,
+        name: *const u8,
+        nlen: usize,
+        out: *mut u8,
+        cap: usize,
+    ) -> usize {
+        if locals.is_null() || out.is_null() || cap < 2 {
+            return 0;
+        }
+        let scratch = self.arena_tmp();
+        let n = unsafe { (*locals).lookup(name, nlen, scratch) };
+        if n == 0 || n + 1 >= cap {
+            return 0;
+        }
+        let mut i = 0usize;
+        while i + 2 < n {
+            if unsafe { *scratch.add(i) } == b'('
+                && unsafe { *scratch.add(i + 1) } == b'*'
+                && unsafe { *scratch.add(i + 2) } == b')'
+            {
+                return 0;
+            }
+            i += 1;
+        }
+        i = 0;
+        while i < n {
+            if unsafe { *scratch.add(i) } == b'[' {
+                return 0;
+            }
+            i += 1;
+        }
+        i = 0;
+        while i < n {
+            unsafe {
+                *out.add(i) = *scratch.add(i);
+            }
+            i += 1;
+        }
+        unsafe {
+            *out.add(n) = 0;
+        }
+        n
+    }
+
+    /* `T *` from a body-view capture ctype — the ` *` append is the whole
+     * grammar (clo_cap_ctype kept fn-ptr/array spellings out). */
+    unsafe fn clo_cap_ptr(out: *mut u8, cap: usize, ct: *const u8, ctlen: usize) -> usize {
+        let mut at = unsafe { bput(out, cap, 0, ct, ctlen) };
+        at = unsafe { bput(out, cap, at, b" *\0".as_ptr(), 2) };
+        if at < cap {
+            unsafe {
+                *out.add(at) = 0;
+            }
+        }
+        at
+    }
+
+    /* The C spelling of one capture param: `rsx_cap_<i>` (stable per
+     * closure slot — the body's cname rows re-render the source name as
+     * `(*rsx_cap_<i>)`, and the call-site rewrite passes `&place`). */
+    unsafe fn clo_cap_name(out: *mut u8, cap: usize, i: usize) -> usize {
+        let mut at = unsafe { zput(out, cap, 0, b"rsx_cap_\0".as_ptr()) };
+        at += unsafe { zput_num(out.add(at), cap - at, i as u32) };
+        at
+    }
 
     unsafe fn clo_set_add(
         &mut self,
@@ -3977,6 +4323,10 @@ impl Lower {
         }
         let n = unsafe { *nset };
         if n >= 48 {
+            /* capacity, not a spelling problem — flag it so the caller
+             * refuses outright (a truncated capture list would silently
+             * under-capture). */
+            self.clo_cap_full = true;
             return false;
         }
         let mut s = 0usize;
@@ -4178,14 +4528,18 @@ impl Lower {
     }
 
     /* Is this name a capture? (on the closure's own binder list or not an
-     * outer local at all — no; bound in the enclosing scopes — yes.) */
+     * outer local at all — no; bound in the enclosing scopes — yes. The
+     * let binding's own name counts as a capture candidate too: a body
+     * reference to it is the self-binding Rust refuses.) A yes adds the
+     * name to the set (first-use order — the capture list) and reports
+     * true; a name already in the set is a dedup'd re-use, not a hit. */
     unsafe fn clo_name_live(
         &mut self,
         name: *const u8,
         nlen: usize,
         set: *mut u8,
         set_lens: *mut usize,
-        nset: usize,
+        nset: *mut usize,
         locals: *mut LocalTab,
     ) -> bool {
         if name.is_null() || nlen == 0 {
@@ -4194,8 +4548,22 @@ impl Lower {
         if unsafe { z_eq(name, nlen, b"_\0".as_ptr()) } {
             return false;
         }
+        if !self.clo_self_name.is_null() && self.clo_self_len == nlen {
+            let mut same = true;
+            let mut j = 0usize;
+            while j < nlen {
+                if unsafe { *name.add(j) } != unsafe { *self.clo_self_name.add(j) } {
+                    same = false;
+                    break;
+                }
+                j += 1;
+            }
+            if same {
+                return unsafe { self.clo_set_add(set, set_lens, nset, name, nlen) };
+            }
+        }
         let mut s = 0usize;
-        while s < nset {
+        while s < *nset {
             if unsafe { *set_lens.add(s) == nlen } {
                 let mut same = true;
                 let mut j = 0usize;
@@ -4213,32 +4581,34 @@ impl Lower {
             s += 1;
         }
         if locals.is_null() {
-            return true;
+            return unsafe { self.clo_set_add(set, set_lens, nset, name, nlen) };
         }
         let scratch = self.arena_tmp();
         let n = unsafe { (*locals).lookup(name, nlen, scratch) };
-        n > 0
+        if n > 0 {
+            return unsafe { self.clo_set_add(set, set_lens, nset, name, nlen) };
+        }
+        false
     }
 
     /* A macro's body is raw captured text — its identifiers are invisible
      * to the AST walk, so scan every word against the outer bindings
      * directly (string content included: an over-refusal there is safe, a
-     * missed read is not). */
+     * missed read is not). Every live hit lands in the set — the walk
+     * never stops early, the capture list must be complete. */
     unsafe fn clo_macro_scan(
         &mut self,
         text: *const u8,
         text_len: usize,
         set: *mut u8,
         set_lens: *mut usize,
-        nset: usize,
+        nset: *mut usize,
         locals: *mut LocalTab,
     ) -> bool {
         if text.is_null() {
             return false;
         }
-        if locals.is_null() {
-            return true;
-        }
+        let mut found = false;
         let mut i = 0usize;
         while i < text_len {
             let c = unsafe { *text.add(i) };
@@ -4261,23 +4631,25 @@ impl Lower {
                 if unsafe {
                     self.clo_name_live(text.add(st), i - st, set, set_lens, nset, locals)
                 } {
-                    return true;
+                    found = true;
                 }
                 continue;
             }
             i += 1;
         }
-        false
+        found
     }
 
-    /* Walk the closure subtree for name reads; a read of an outer local
-     * (not one of the closure's own binders) is a capture. */
+    /* Walk the closure subtree for name reads; every read of an outer
+     * local (not one of the closure's own binders) joins the set — the
+     * capture list. The return is "any hit" (a dedup'd re-use reports
+     * false for that name); the walk itself never stops early. */
     unsafe fn clo_uses(
         &mut self,
         e: *const pm_jit_rsx_ast_t,
         set: *mut u8,
         set_lens: *mut usize,
-        nset: usize,
+        nset: *mut usize,
         locals: *mut LocalTab,
     ) -> bool {
         if e.is_null() {
@@ -4292,6 +4664,7 @@ impl Lower {
                 self.clo_macro_scan((*e).text, (*e).text_len, set, set_lens, nset, locals)
             };
         }
+        let mut found = false;
         if k == pm_jit_rsx_ast_kind::PATH {
             let kids = unsafe { (*e).kids };
             let nk = unsafe { (*e).n_kids } as usize;
@@ -4325,12 +4698,12 @@ impl Lower {
                 let seg = unsafe { *kids.add(i) };
                 if unsafe { (*seg).kind } != pm_jit_rsx_ast_kind::PATH {
                     if unsafe { self.clo_uses(seg, set, set_lens, nset, locals) } {
-                        return true;
+                        found = true;
                     }
                 }
                 i += 1;
             }
-            return false;
+            return found;
         }
         let kids = unsafe { (*e).kids };
         let nk = unsafe { (*e).n_kids } as usize;
@@ -4340,12 +4713,12 @@ impl Lower {
             while i < nk {
                 if i != 1 {
                     if unsafe { self.clo_uses(*kids.add(i), set, set_lens, nset, locals) } {
-                        return true;
+                        found = true;
                     }
                 }
                 i += 1;
             }
-            return false;
+            return found;
         }
         if k == pm_jit_rsx_ast_kind::MATCH {
             /* kid 0 is the scrutinee; each arm's kid 0 is its pattern
@@ -4355,7 +4728,7 @@ impl Lower {
                 let arm = unsafe { *kids.add(i) };
                 if i == 0 {
                     if unsafe { self.clo_uses(arm, set, set_lens, nset, locals) } {
-                        return true;
+                        found = true;
                     }
                 } else {
                     let ak = unsafe { (*arm).kids };
@@ -4363,52 +4736,281 @@ impl Lower {
                     let mut j = 1usize;
                     while j < an {
                         if unsafe { self.clo_uses(*ak.add(j), set, set_lens, nset, locals) } {
-                            return true;
+                            found = true;
                         }
                         j += 1;
                     }
                 }
                 i += 1;
             }
-            return false;
+            return found;
         }
         if k == pm_jit_rsx_ast_kind::LET || k == pm_jit_rsx_ast_kind::FOR {
             /* kid 0 is the target/var (a binder) */
             let mut i = 1usize;
             while i < nk {
                 if unsafe { self.clo_uses(*kids.add(i), set, set_lens, nset, locals) } {
-                    return true;
+                    found = true;
                 }
                 i += 1;
             }
-            return false;
+            return found;
         }
         let mut i = 0usize;
         while i < nk {
             if unsafe { self.clo_uses(*kids.add(i), set, set_lens, nset, locals) } {
-                return true;
+                found = true;
             }
             i += 1;
         }
-        false
+        found
     }
 
-    /* The whole capture test: the closure's own binders never capture; a
-     * body read of any other in-scope local does. */
-    unsafe fn clo_capture(&mut self, clo: *const pm_jit_rsx_ast_t, locals: *mut LocalTab) -> bool {
+    /* The whole capture analysis: the closure's own binders fill the set
+     * first (they never capture), then every body read of an outer local
+     * appends — set[nbind..*nset) is the capture list in first-use
+     * order. self_name (the let binding's own name; may be NULL) counts
+     * as a capture candidate so a self-reference refuses instead of
+     * dropping to an undeclared C name. Returns false on set overflow —
+     * a refusal, never a partial capture list. */
+    unsafe fn clo_capture(
+        &mut self,
+        clo: *const pm_jit_rsx_ast_t,
+        locals: *mut LocalTab,
+        self_name: *const u8,
+        self_len: usize,
+        set: *mut u8,
+        set_lens: *mut usize,
+        nset: *mut usize,
+        nbind: *mut usize,
+    ) -> bool {
+        let saved_name = self.clo_self_name;
+        let saved_len = self.clo_self_len;
+        self.clo_self_name = self_name;
+        self.clo_self_len = self_len;
+        self.clo_cap_full = false;
+        let mut ok = true;
+        if !unsafe { self.clo_inner(clo, set, set_lens, nset) } {
+            ok = false;
+        }
+        unsafe {
+            *nbind = *nset;
+        }
+        if ok {
+            unsafe {
+                self.clo_uses(clo, set, set_lens, nset, locals);
+            }
+        }
+        if self.clo_cap_full {
+            ok = false;
+        }
+        self.clo_self_name = saved_name;
+        self.clo_self_len = saved_len;
+        ok
+    }
+
+    /* Nested-closure pre-pass: register every closure LET inside `e` in
+     * the pending table (innermost-first — a nested closure's own nested
+     * closure types before it), so a body CALL through one types against
+     * the pending fn-pointer spelling before the closure is emitted.
+     * `locals` is the enclosing body's table (params + captures); a
+     * nested closure types against it. Returns false on table overflow
+     * (a refusal, never a partial pass). Re-running is idempotent: a
+     * node already registered is skipped. */
+    unsafe fn clo_pend_body(
+        &mut self,
+        e: *const pm_jit_rsx_ast_t,
+        locals: *mut LocalTab,
+    ) -> bool {
+        if e.is_null() {
+            return true;
+        }
+        let k = unsafe { (*e).kind };
+        let kids = unsafe { (*e).kids };
+        let nk = unsafe { (*e).n_kids } as usize;
+        let mut i = 0usize;
+        while i < nk {
+            if !unsafe { self.clo_pend_body(*kids.add(i), locals) } {
+                return false;
+            }
+            i += 1;
+        }
+        if k == pm_jit_rsx_ast_kind::LET && nk >= 1 {
+            let mut name: *const u8 = core::ptr::null();
+            let mut name_len: usize = 0;
+            let mut init: *const pm_jit_rsx_ast_t = core::ptr::null();
+            let mut j = 0usize;
+            while j < nk {
+                let kd = unsafe { *kids.add(j) };
+                let kk = unsafe { (*kd).kind };
+                if kk == pm_jit_rsx_ast_kind::PATH && name_len == 0 {
+                    name = unsafe { (*kd).text };
+                    name_len = unsafe { (*kd).text_len };
+                } else if kk != pm_jit_rsx_ast_kind::TYPE && kk != pm_jit_rsx_ast_kind::ATTR {
+                    init = kd;
+                }
+                j += 1;
+            }
+            while !init.is_null()
+                && unsafe { (*init).kind } == pm_jit_rsx_ast_kind::EXPR_STMT
+                && unsafe { (*init).n_kids } as usize >= 1
+            {
+                init = unsafe { *(*init).kids.add(0) };
+            }
+            if !init.is_null()
+                && unsafe { (*init).kind } == pm_jit_rsx_ast_kind::CLOSURE
+                && name_len > 0
+                && name_len < 48
+            {
+                if self.clo_pend_n >= CLO_CAP {
+                    return false;
+                }
+                let mut seen = false;
+                let mut t = 0usize;
+                while t < self.clo_pend_n {
+                    if self.clo_pend_nodes[t] == init {
+                        seen = true;
+                    }
+                    t += 1;
+                }
+                if !seen {
+                    if !unsafe { self.clo_pend_clo(init, name, name_len, locals) } {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /* Register one closure's typing row: the closure's inferred RETURN
+     * ctype is what a call through it (expr_ctype's CALL arm) needs, so a
+     * call anywhere in the same body — even before the closure's own let
+     * is emitted — types against the row. Returns false when the
+     * closure's return cannot be computed (its own nested closure could
+     * not be registered) or the table is full. */
+    unsafe fn clo_pend_clo(
+        &mut self,
+        clo: *const pm_jit_rsx_ast_t,
+        name: *const u8,
+        name_len: usize,
+        locals: *mut LocalTab,
+    ) -> bool {
+        if self.clo_pend_n >= CLO_CAP {
+            return false;
+        }
+        let kids = unsafe { (*clo).kids };
+        let nk = unsafe { (*clo).n_kids } as usize;
+        if nk == 0 {
+            return true;
+        }
+        let body = unsafe { *kids.add(nk - 1) };
+        if !unsafe { self.clo_pend_body(body, locals) } {
+            return false;
+        }
         let mut set: [[u8; 48]; 48] = [[0; 48]; 48];
         let mut set_lens: [usize; 48] = [0; 48];
         let mut nset: usize = 0;
+        let mut nbind: usize = 0;
         if !unsafe {
-            self.clo_inner(clo, set[0].as_mut_ptr(), set_lens.as_mut_ptr(), &mut nset)
+            self.clo_capture(
+                clo,
+                locals,
+                name,
+                name_len,
+                set[0].as_mut_ptr(),
+                set_lens.as_mut_ptr(),
+                &mut nset,
+                &mut nbind,
+            )
         } {
-            return true;
+            return false;
         }
-        if locals.is_null() {
-            return true;
+        let mut names: [*const u8; CLO_MAXP] = [core::ptr::null(); CLO_MAXP];
+        let mut name_lens: [usize; CLO_MAXP] = [0; CLO_MAXP];
+        let mut pcts: [[u8; 96]; CLO_MAXP] = [[0; 96]; CLO_MAXP];
+        let mut pct_lens: [usize; CLO_MAXP] = [0; CLO_MAXP];
+        let mut ret_ct: [u8; 96] = [0; 96];
+        let mut ret_len: usize = 0;
+        let mut bad = false;
+        let _np = unsafe {
+            self.clo_sig(
+                clo,
+                core::ptr::null(),
+                locals,
+                set[0].as_mut_ptr(),
+                set_lens.as_mut_ptr(),
+                nset,
+                nbind,
+                names.as_mut_ptr(),
+                name_lens.as_mut_ptr(),
+                pcts[0].as_mut_ptr(),
+                pct_lens.as_mut_ptr(),
+                ret_ct.as_mut_ptr(),
+                &mut ret_len,
+                &mut bad,
+            )
+        };
+        if bad || ret_len == 0 || ret_len >= 96 {
+            return false;
         }
-        unsafe {
-            self.clo_uses(clo, set[0].as_mut_ptr(), set_lens.as_mut_ptr(), nset, locals)
+        /* append AFTER the recursive work — clo_sig's own pre-pass may
+         * have shifted the count, and its restore only rewinds to its
+         * entry watermark, not past nested rows this call must keep */
+        if self.clo_pend_n >= CLO_CAP {
+            return false;
         }
+        let row = self.clo_pend_n;
+        self.clo_pend_nodes[row] = clo;
+        let mut i = 0usize;
+        while i < name_len {
+            self.clo_pend_names[row][i] = unsafe { *name.add(i) };
+            i += 1;
+        }
+        self.clo_pend_name_lens[row] = name_len;
+        i = 0;
+        while i < ret_len {
+            self.clo_pend_rets[row][i] = ret_ct[i];
+            i += 1;
+        }
+        self.clo_pend_ret_lens[row] = ret_len;
+        self.clo_pend_n += 1;
+        true
+    }
+
+    /* The pending return ctype of `name` (0 = none) — copied to out. */
+    unsafe fn clo_pend_ret(&mut self, name: *const u8, nlen: usize, out: *mut u8, cap: usize) -> usize {
+        let mut i = self.clo_pend_n;
+        while i > 0 {
+            i -= 1;
+            if self.clo_pend_name_lens[i] == nlen {
+                let mut eq = true;
+                let mut j = 0usize;
+                while j < nlen {
+                    if self.clo_pend_names[i][j] != unsafe { *name.add(j) } {
+                        eq = false;
+                    }
+                    j += 1;
+                }
+                if eq {
+                    let rl = self.clo_pend_ret_lens[i];
+                    if rl == 0 || rl >= cap {
+                        return 0;
+                    }
+                    j = 0;
+                    while j < rl {
+                        unsafe {
+                            *out.add(j) = self.clo_pend_rets[i][j];
+                        }
+                        j += 1;
+                    }
+                    unsafe {
+                        *out.add(rl) = 0;
+                    }
+                    return rl;
+                }
+            }
+        }
+        0
     }
 }

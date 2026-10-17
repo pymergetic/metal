@@ -2032,7 +2032,9 @@ impl Lower {
                 /* closure as value (unannotated let): the fn-pointer
                  * spelling comes from the closure itself — its `: T`
                  * annotations plus the body's inferred return. */
-                ct_len = unsafe { self.clo_type_of(init, ct, 128) };
+                ct_len = unsafe {
+                    self.clo_type_of(init, locals, name, name_len, ct, 128)
+                };
             } else {
                 ct_len = unsafe { self.expr_ctype(init, ct, 128, locals) };
             }
@@ -2413,23 +2415,38 @@ impl Lower {
             }
             if ik == pm_jit_rsx_ast_kind::CLOSURE {
                 /* closure as value: a synthesized static fn
-                 * (`rsx_clo_<n>`) carries the body; this binding takes
-                 * its designator. The fn-ptr ascription (ty) types the
-                 * synthesized signature exactly when present. */
-                let slot = unsafe { self.clo_synth(init, locals, ty, line) };
+                 * (`rsx_clo_<n>`) carries the body. Capture-less: this
+                 * binding takes the fn designator (the declarator's type
+                 * is the fn pointer — ascribed or shape-inferred).
+                 * Capturing: no value exists — the binding is only the
+                 * name; direct calls rewrite to the designator with
+                 * `&place` prepended per capture. */
+                let slot = unsafe {
+                    self.clo_synth(init, locals, ty, line, true, name, name_len)
+                };
                 if slot == 0 {
                     return;
                 }
-                self.indent();
-                unsafe {
-                    self.emit_declarator(ct, ct_len, name, name_len);
+                if self.clo_capns[slot - 1] == 0 {
+                    self.indent();
+                    unsafe {
+                        self.emit_declarator(ct, ct_len, name, name_len);
+                    }
+                    self.out.puts(b" = \0".as_ptr());
+                    self.out.put(
+                        self.clo_names[slot - 1].as_ptr(),
+                        self.clo_name_lens[slot - 1],
+                    );
+                    self.out.puts(b";\n\0".as_ptr());
+                    return;
                 }
-                self.out.puts(b" = \0".as_ptr());
-                self.out.put(
-                    self.clo_names[slot - 1].as_ptr(),
-                    self.clo_name_lens[slot - 1],
-                );
-                self.out.puts(b";\n\0".as_ptr());
+                /* capturing: mark the closure slot on the binding and
+                 * stop — the scope must not emit a dummy value. clo_synth
+                 * returns batch_slot + 1; clo_find hands that same value
+                 * back and emit_call subtracts 1, so store it verbatim. */
+                unsafe {
+                    (*locals).mark_clo(name, name_len, slot);
+                }
                 return;
             }
             /* Block initializer with statements: the statements are the
