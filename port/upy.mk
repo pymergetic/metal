@@ -83,13 +83,21 @@ PM_METAL_PACKS_PY := \
 # verbatim with the unix and browser seats.
 PM_METAL_CONSOLE_PROVE_PY := $(METAL_DIR)/upy_console_prove.py
 
+# The tree carries ONE guest CDN source; parallel board proves need
+# per-board ports (live_cdn.sh drops leftover listeners on its own port
+# and a shared 18124 would have two proves kill each other). The build
+# bakes $(CDN_PORT) into the copy it embeds — the generated file is
+# bytes-for-embed, the checked-in .py stays the only edited source.
+$(BUILD)/firmware_upy_cdn.py: $(PORT_DIR)/upy/firmware_upy_cdn.py | $(BUILD)
+	sed 's/^CDN_PORT = .*/CDN_PORT = $(CDN_PORT)/' $< > $@
+
 $(BUILD)/firmware_upy_src.c: $(PORT_DIR)/upy/firmware_upy_ready.py \
-		$(PORT_DIR)/upy/firmware_upy_cdn.py $(PM_METAL_PACKS_PY) \
+		$(BUILD)/firmware_upy_cdn.py $(PM_METAL_PACKS_PY) \
 		$(PM_METAL_CONSOLE_PROVE_PY) \
 		$(PORT_DIR)/embed_bytes.py | $(BUILD)
 	python3 $(PORT_DIR)/embed_bytes.py -o $@ \
 		--str pm_metal_firmware_upy_ready_py $(PORT_DIR)/upy/firmware_upy_ready.py \
-		--str pm_metal_firmware_upy_cdn_py $(PORT_DIR)/upy/firmware_upy_cdn.py \
+		--str pm_metal_firmware_upy_cdn_py $(BUILD)/firmware_upy_cdn.py \
 		--str pm_metal_firmware_upy_console_py $(PM_METAL_CONSOLE_PROVE_PY) \
 		--str pm_metal_seat_package_html_py $(PM_METAL_SEAT_PY)/www/_compiled/package_html.py \
 		--str pm_metal_seat_shell_html_py $(PM_METAL_SEAT_PY)/www/_compiled/shell_html.py \

@@ -85,6 +85,11 @@ include $(PORT_DIR)/fw_cards.mk
 include $(PORT_DIR)/fw_wamr.mk
 include $(PORT_DIR)/upy.mk
 
+# No live CDN on RV1106 (prove builds metal.bin only), but the embedded
+# guest still gets its port baked by upy.mk — keep it distinct from the
+# QEMU boards so host-side servers stay unique per board.
+CDN_PORT ?= 18127
+
 .PHONY: all prove pack run upload clean
 all: $(BUILD)/metal.bin $(PACK_EXTRAS)
 prove: $(BUILD)/metal.bin

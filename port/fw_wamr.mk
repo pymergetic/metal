@@ -57,6 +57,16 @@ FW_RUSTC_CPU := -C target-feature=-sse,-sse2 -C relocation-model=static
 else
 FW_RUSTC_CPU := -C relocation-model=static
 endif
+# Per-board crate name. rustc emits its codegen temporaries named after
+# the crate (`fw_lock.<hash>-cgu.*.rcgu.o`) into the make working
+# directory; four boards building `fw_lock` concurrently unlink each
+# other's temporaries mid-archiving ("failed to build archive: failed to
+# open object file", lld-link "unknown file type: fw_lock...rcgu.o" —
+# reproduced by running the four board builds at once). A crate name
+# unique per board gives the temporaries unique names. The archive path
+# stays $(BUILD)/libfw_lock.a and every symbol the C link calls is
+# extern "C" (unmangled), so nothing downstream changes.
+FW_CRATE := fw_lock_$(shell printf '%s' $(BOARD) | tr 'A-Z' 'a-z')
 $(BUILD)/libfw_lock.a: $(PORT_DIR)/fw_lock/lib.rs \
 		$(PORT_DIR)/fw_lock/util.rs \
 		$(PORT_DIR)/fw_lock/wasmmod.rs \
@@ -70,11 +80,11 @@ $(BUILD)/libfw_lock.a: $(PORT_DIR)/fw_lock/lib.rs \
 		$(METAL_SRC)/pymergetic/metal/net/http/asgi/__impl__.rs \
 		$(RSX_FLAT) | $(BUILD)
 	PM_FW_RSX_FLAT="$(abspath $(RSX_FLAT))" \
-	$(RUSTC) --edition 2024 --crate-type staticlib --crate-name fw_lock \
+	$(RUSTC) --edition 2024 --crate-type staticlib --crate-name $(FW_CRATE) \
 		--target $(FW_RUSTC_TARGET) -C panic=abort -C opt-level=s \
 		$(FW_RUSTC_REDZONE) $(FW_RUSTC_CPU) \
 		--emit=dep-info=$(BUILD)/libfw_lock.d.raw,link=$@ $<
-	sed -n 's|^libfw_lock\.a:|$@:|p' $(BUILD)/libfw_lock.d.raw > $(BUILD)/libfw_lock.d
+	sed -n 's|^lib$(FW_CRATE)\.a:|$@:|p' $(BUILD)/libfw_lock.d.raw > $(BUILD)/libfw_lock.d
 
 # The list above is by hand, so it is one forgotten card away from linking a
 # stale one. rustc's dep-info knows every `#[path]` the crate actually read

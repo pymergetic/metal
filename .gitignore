@@ -8,6 +8,10 @@ tools/zp_pico_prove/.build/
 # Cargo output for this crate (metal is its own crate now).
 target/
 
+# rustc CGU temporaries (named after the crate) land in the make working
+# directory and a crashed run can leave one behind — never commit those.
+*.rcgu.o
+
 # clangd database — absolute -I paths naming one checkout (make compile-commands).
 compile_commands.json
 

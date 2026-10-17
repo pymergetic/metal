@@ -574,17 +574,29 @@ prove-all: browser-toolchain-check external-manifest-check $(OUT) firmware-check
 	$(MAKE) browser
 	$(MAKE) external-source-check
 
+# The four boards run AT ONCE. Each builds/proves in its own $(BUILD) dir
+# and the shared-state races that used to make this unsafe are isolated:
+# per-board fw_lock crate name (rustc CGU temporaries), per-board CDN port
+# baked into the guest (live_cdn.sh drops listeners on its own port), and
+# atomic template writes. Every board runs to completion; the target fails
+# if any board did (exit status of each sub-make is kept).
 firmware:
-	$(MAKE) -C $(CURDIR)/port BOARD=X86_64_BIOS all
-	$(MAKE) -C $(CURDIR)/port BOARD=X86_64_UEFI all
-	$(MAKE) -C $(CURDIR)/port BOARD=ARMV7_RV1106 all
-	$(MAKE) -C $(CURDIR)/port BOARD=ARMV7_QEMU all
+	@fail=0; \
+	$(MAKE) -C $(CURDIR)/port BOARD=X86_64_BIOS all & p1=$$!; \
+	$(MAKE) -C $(CURDIR)/port BOARD=X86_64_UEFI all & p2=$$!; \
+	$(MAKE) -C $(CURDIR)/port BOARD=ARMV7_RV1106 all & p3=$$!; \
+	$(MAKE) -C $(CURDIR)/port BOARD=ARMV7_QEMU all & p4=$$!; \
+	wait $$p1 || fail=1; wait $$p2 || fail=1; wait $$p3 || fail=1; wait $$p4 || fail=1; \
+	exit $$fail
 
 firmware-prove:
-	$(MAKE) -C $(CURDIR)/port BOARD=X86_64_BIOS prove
-	$(MAKE) -C $(CURDIR)/port BOARD=X86_64_UEFI prove
-	$(MAKE) -C $(CURDIR)/port BOARD=ARMV7_RV1106 prove
-	$(MAKE) -C $(CURDIR)/port BOARD=ARMV7_QEMU prove
+	@fail=0; \
+	$(MAKE) -C $(CURDIR)/port BOARD=X86_64_BIOS prove & p1=$$!; \
+	$(MAKE) -C $(CURDIR)/port BOARD=X86_64_UEFI prove & p2=$$!; \
+	$(MAKE) -C $(CURDIR)/port BOARD=ARMV7_RV1106 prove & p3=$$!; \
+	$(MAKE) -C $(CURDIR)/port BOARD=ARMV7_QEMU prove & p4=$$!; \
+	wait $$p1 || fail=1; wait $$p2 || fail=1; wait $$p3 || fail=1; wait $$p4 || fail=1; \
+	exit $$fail
 
 firmware-check:
 	mkdir -p $(CURDIR)/build

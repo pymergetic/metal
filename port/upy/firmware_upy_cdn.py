@@ -212,9 +212,12 @@ import pymergetic.wasmmod.net.cdn as cdn
 
 cdn.session_id("sess-1")
 # QEMU user-net host gateway (fixed by QEMU SLIRP, not a lab LAN). The prove
-# serves extmod/wasmmod/examples/packs there; port 18124 is agreed with
-# port/live_cdn.sh (18123 is often left bound by a prior prove).
-cdn.configure("http://10.0.2.2:18124", "tok-cdn")
+# serves extmod/wasmmod/examples/packs there; the port is agreed with
+# port/live_cdn.sh. CDN_PORT is the ONE line the build rewrites (upy.mk bakes
+# the board's own port here) so parallel board proves each talk to their own
+# server instead of killing a shared listener on 18124.
+CDN_PORT = 18124
+cdn.configure("http://10.0.2.2:" + str(CDN_PORT), "tok-cdn")
 print("upy cdn")
 import pymergetic.wasmmod_examples.hello as hello
 
